@@ -16,6 +16,8 @@ from metrics import SegMetrics
 from segment_anything import sam_model_registry
 from utils import FocalDiceloss_IoULoss, get_logger
 
+os.environ["ALBUMENTATIONS_DISABLE_VERSION_CHECK"] = "1"
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune SAM-Med2D on BraTS 2021 with Validation and Early Stopping")

@@ -1,18 +1,19 @@
-# evaluate.py (完整更新版，支持对比)
-
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
 import argparse
 import os
-from torch.nn import functional as F
 
+import numpy as np
+import torch
+import torch.nn as nn
 from peft import PeftModel
-from segment_anything import sam_model_registry
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 from BraTSDataset import BraTSDataset
 from metrics import SegMetrics
+from segment_anything import sam_model_registry
+
+os.environ["ALBUMENTATIONS_DISABLE_VERSION_CHECK"] = "1"
 
 
 def parse_args():
@@ -101,6 +102,7 @@ def main(args):
         data_path=args.data_path,
         image_size=args.image_size,
         num_classes=args.num_classes,
+        mode='val',
         subset_size=args.subset_size
     )
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
@@ -151,7 +153,7 @@ def main(args):
             total_metrics += np.array(batch_metrics)
 
     # --- 6. 聚合和显示结果 (逻辑保持不变) ---
-    avg_metrics = total_metrics / len(val_dataset)
+    avg_metrics = total_metrics / len(val_loader)
 
     print("\n--- 评估结果 ---")
     i = 0

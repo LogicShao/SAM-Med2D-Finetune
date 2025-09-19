@@ -6,7 +6,7 @@ python finetune.py ^
     --work_dir ./brats_finetune_output ^
     --run_name brats_lora_validated ^
     --lr 1e-5 ^
-    --batch_size 8 ^
+    --batch_size 64 ^
     --epochs 100 ^
     --early_stopping_patience 10 ^
     --train_subset_size 1000 ^

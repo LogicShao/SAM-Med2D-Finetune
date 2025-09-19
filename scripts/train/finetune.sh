@@ -1,10 +1,11 @@
 python finetune.py \
-    --data_path ../Brain-Tumor-Segmentation/BraTs2021/BraTS2021_Training_Data \
+    --train_data_path dataset_for_SAM-Med2D/train \
+    --val_data_path dataset_for_SAM-Med2D/test \
     --work_dir ./brats_finetune_output \
-    --run_name brats_lora_r8_alpha16 \
-    --epochs 50 \
+    --run_name brats_lora_validated \
+    --lr 1e-5 \
     --batch_size 64 \
-    --lr 1e-4 \
-    --sam_checkpoint ./pretrain_model/sam-med2d_b.pth \
-    --lora_r 8 \
-    --lora_alpha 16
+    --epochs 100 \
+    --early_stopping_patience 10 \
+    --train_subset_size 1000 \
+    --val_subset_size 200
