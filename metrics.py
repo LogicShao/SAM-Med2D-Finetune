@@ -1,6 +1,6 @@
-import torch
 import numpy as np
-import cv2
+import torch
+
 
 def _threshold(x, threshold=None):
     if threshold is not None:
@@ -23,26 +23,26 @@ def _list_tensor(x, y):
     return x, y
 
 
-def iou(pr, gt, eps=1e-7, threshold = 0.5):
+def iou(pr, gt, eps=1e-7, threshold=0.5):
     pr_, gt_ = _list_tensor(pr, gt)
     pr_ = _threshold(pr_, threshold=threshold)
     gt_ = _threshold(gt_, threshold=threshold)
-    intersection = torch.sum(gt_ * pr_,dim=[1,2,3])
-    union = torch.sum(gt_,dim=[1,2,3]) + torch.sum(pr_,dim=[1,2,3]) - intersection
+    intersection = torch.sum(gt_ * pr_, dim=[1, 2, 3])
+    union = torch.sum(gt_, dim=[1, 2, 3]) + torch.sum(pr_, dim=[1, 2, 3]) - intersection
     return ((intersection + eps) / (union + eps)).cpu().numpy()
 
 
-def dice(pr, gt, eps=1e-7, threshold = 0.5):
+def dice(pr, gt, eps=1e-7, threshold=0.5):
     pr_, gt_ = _list_tensor(pr, gt)
     pr_ = _threshold(pr_, threshold=threshold)
     gt_ = _threshold(gt_, threshold=threshold)
-    intersection = torch.sum(gt_ * pr_,dim=[1,2,3])
-    union = torch.sum(gt_,dim=[1,2,3]) + torch.sum(pr_,dim=[1,2,3])
-    return ((2. * intersection +eps) / (union + eps)).cpu().numpy()
+    intersection = torch.sum(gt_ * pr_, dim=[1, 2, 3])
+    union = torch.sum(gt_, dim=[1, 2, 3]) + torch.sum(pr_, dim=[1, 2, 3])
+    return ((2. * intersection + eps) / (union + eps)).cpu().numpy()
 
 
 def SegMetrics(pred, label, metrics):
-    metric_list = []  
+    metric_list = []
     if isinstance(metrics, str):
         metrics = [metrics, ]
     for i, metric in enumerate(metrics):

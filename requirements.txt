@@ -1,0 +1,13 @@
+opencv-python>=4.12.0.88
+torch>=2.8.0+cu129
+numpy>=2.1.1
+tqdm>=4.67.1
+matplotlib>=3.10.6
+albumentations>=2.0.8
+scikit-image>=0.25.2
+torchvision>=0.23.0+cu129
+pillow>=11.0.0
+scipy>=1.16.2
+peft>=0.17.1
+simpleitk>=2.5.2
+kagglehub>=0.2.7

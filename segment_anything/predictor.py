@@ -4,20 +4,19 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
 
 from segment_anything.modeling import Sam
-
-from typing import Optional, Tuple
-
 from .utils.transforms import ResizeLongestSide
 
 
 class SamPredictor:
     def __init__(
-        self,
-        sam_model: Sam,
+            self,
+            sam_model: Sam,
     ) -> None:
         """
         Uses SAM to calculate the image embedding for an image, and then
@@ -32,9 +31,9 @@ class SamPredictor:
         self.reset_image()
 
     def set_image(
-        self,
-        image: np.ndarray,
-        image_format: str = "RGB",
+            self,
+            image: np.ndarray,
+            image_format: str = "RGB",
     ) -> None:
         """
         Calculates the image embeddings for the provided image, allowing
@@ -61,9 +60,9 @@ class SamPredictor:
 
     @torch.no_grad()
     def set_torch_image(
-        self,
-        transformed_image: torch.Tensor,
-        original_image_size: Tuple[int, ...],
+            self,
+            transformed_image: torch.Tensor,
+            original_image_size: Tuple[int, ...],
     ) -> None:
         """
         Calculates the image embeddings for the provided image, allowing
@@ -77,9 +76,9 @@ class SamPredictor:
             before transformation, in (H, W) format.
         """
         assert (
-            len(transformed_image.shape) == 4
-            and transformed_image.shape[1] == 3
-            and max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
+                len(transformed_image.shape) == 4
+                and transformed_image.shape[1] == 3
+                and max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
         ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
         self.reset_image()
 
@@ -90,13 +89,13 @@ class SamPredictor:
         self.is_image_set = True
 
     def predict(
-        self,
-        point_coords: Optional[np.ndarray] = None,
-        point_labels: Optional[np.ndarray] = None,
-        box: Optional[np.ndarray] = None,
-        mask_input: Optional[np.ndarray] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
+            self,
+            point_coords: Optional[np.ndarray] = None,
+            point_labels: Optional[np.ndarray] = None,
+            box: Optional[np.ndarray] = None,
+            mask_input: Optional[np.ndarray] = None,
+            multimask_output: bool = True,
+            return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Predict masks for the given input prompts, using the currently set image.
@@ -137,7 +136,7 @@ class SamPredictor:
         coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
         if point_coords is not None:
             assert (
-                point_labels is not None
+                    point_labels is not None
             ), "point_labels must be supplied if point_coords is supplied."
 
             point_coords = self.transform.apply_coords(point_coords, self.original_size)
@@ -169,13 +168,13 @@ class SamPredictor:
 
     @torch.no_grad()
     def predict_torch(
-        self,
-        point_coords: Optional[torch.Tensor],
-        point_labels: Optional[torch.Tensor],
-        boxes: Optional[torch.Tensor] = None,
-        mask_input: Optional[torch.Tensor] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
+            self,
+            point_coords: Optional[torch.Tensor],
+            point_labels: Optional[torch.Tensor],
+            boxes: Optional[torch.Tensor] = None,
+            mask_input: Optional[torch.Tensor] = None,
+            multimask_output: bool = True,
+            return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Predict masks for the given input prompts, using the currently set image.

@@ -1,20 +1,21 @@
-from segment_anything import sam_model_registry, SamPredictor
-import torch.nn as nn
-import torch
 import argparse
-import os
-from torch import optim
-from torch.utils.data import DataLoader
-from DataLoader import TrainingDataset, stack_dict_batched
-from utils import FocalDiceloss_IoULoss, get_logger, generate_point, setting_prompt_none
-from metrics import SegMetrics
-import time
-from tqdm import tqdm
-import numpy as np
 import datetime
-from torch.nn import functional as F
-from apex import amp
+import os
 import random
+import time
+
+import numpy as np
+import torch
+# from apex import amp
+from torch import optim
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from DataLoader import TrainingDataset, stack_dict_batched
+from metrics import SegMetrics
+from segment_anything import sam_model_registry
+from utils import FocalDiceloss_IoULoss, get_logger, generate_point, setting_prompt_none
 
 
 def parse_args():
@@ -25,11 +26,11 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=2, help="train batch size")
     parser.add_argument("--image_size", type=int, default=256, help="image_size")
     parser.add_argument("--mask_num", type=int, default=5, help="get mask number")
-    parser.add_argument("--data_path", type=str, default="data_demo", help="train data path") 
+    parser.add_argument("--data_path", type=str, default="data_demo", help="train data path")
     parser.add_argument("--metrics", nargs='+', default=['iou', 'dice'], help="metrics")
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
-    parser.add_argument("--resume", type=str, default=None, help="load resume") 
+    parser.add_argument("--resume", type=str, default=None, help="load resume")
     parser.add_argument("--model_type", type=str, default="vit_b", help="sam model_type")
     parser.add_argument("--sam_checkpoint", type=str, default="pretrain_model/sam-med2d_b.pth", help="sam checkpoint")
     parser.add_argument("--iter_point", type=int, default=8, help="point iterations")
@@ -48,10 +49,10 @@ def to_device(batch_input, device):
     device_input = {}
     for key, value in batch_input.items():
         if value is not None:
-            if key=='image' or key=='label':
+            if key == 'image' or key == 'label':
                 device_input[key] = value.float().to(device)
             elif type(value) is list or type(value) is torch.Size:
-                 device_input[key] = value
+                device_input[key] = value
             else:
                 device_input[key] = value.to(device)
         else:
@@ -59,8 +60,8 @@ def to_device(batch_input, device):
     return device_input
 
 
-def prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter = False):
-    if  batched_input["point_coords"] is not None:
+def prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter=False):
+    if batched_input["point_coords"] is not None:
         points = (batched_input["point_coords"], batched_input["point_labels"])
     else:
         points = None
@@ -81,23 +82,23 @@ def prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_ite
         )
 
     low_res_masks, iou_predictions = model.mask_decoder(
-        image_embeddings = image_embeddings,
-        image_pe = model.prompt_encoder.get_dense_pe(),
+        image_embeddings=image_embeddings,
+        image_pe=model.prompt_encoder.get_dense_pe(),
         sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
         multimask_output=args.multimask,
     )
-  
+
     if args.multimask:
         max_values, max_indexs = torch.max(iou_predictions, dim=1)
         max_values = max_values.unsqueeze(1)
         iou_predictions = max_values
         low_res = []
         for i, idx in enumerate(max_indexs):
-            low_res.append(low_res_masks[i:i+1, idx])
+            low_res.append(low_res_masks[i:i + 1, idx])
         low_res_masks = torch.stack(low_res, 0)
 
-    masks = F.interpolate(low_res_masks,(args.image_size, args.image_size), mode="bilinear", align_corners=False,)
+    masks = F.interpolate(low_res_masks, (args.image_size, args.image_size), mode="bilinear", align_corners=False, )
     return masks, low_res_masks, iou_predictions
 
 
@@ -108,7 +109,7 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
     for batch, batched_input in enumerate(train_loader):
         batched_input = stack_dict_batched(batched_input)
         batched_input = to_device(batched_input, args.device)
-        
+
         if random.random() > 0.5:
             batched_input["point_coords"] = None
             flag = "boxes"
@@ -125,7 +126,7 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
         if args.use_amp:
             labels = batched_input["label"].half()
             image_embeddings = model.image_encoder(batched_input["image"].half())
-  
+
             B, _, _, _ = image_embeddings.shape
             image_embeddings_repeat = []
             for i in range(B):
@@ -134,7 +135,8 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
                 image_embeddings_repeat.append(image_embed)
             image_embeddings = torch.cat(image_embeddings_repeat, dim=0)
 
-            masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter = False)
+            masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings,
+                                                                       decoder_iter=False)
             loss = criterion(masks, labels, iou_predictions)
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward(retain_graph=False)
@@ -151,20 +153,22 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
                 image_embeddings_repeat.append(image_embed)
             image_embeddings = torch.cat(image_embeddings_repeat, dim=0)
 
-            masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter = False)
+            masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings,
+                                                                       decoder_iter=False)
             loss = criterion(masks, labels, iou_predictions)
             loss.backward(retain_graph=False)
 
         optimizer.step()
         optimizer.zero_grad()
 
-        if int(batch+1) % 50 == 0:
-            print(f'Epoch: {epoch+1}, Batch: {batch+1}, first {flag} prompt: {SegMetrics(masks, labels, args.metrics)}')
+        if int(batch + 1) % 50 == 0:
+            print(
+                f'Epoch: {epoch + 1}, Batch: {batch + 1}, first {flag} prompt: {SegMetrics(masks, labels, args.metrics)}')
 
         point_num = random.choice(args.point_list)
         batched_input = generate_point(masks, labels, low_res_masks, batched_input, point_num)
         batched_input = to_device(batched_input, args.device)
-    
+
         image_embeddings = image_embeddings.detach().clone()
         for n, value in model.named_parameters():
             if "image_encoder" in n:
@@ -178,39 +182,44 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
                 batched_input = setting_prompt_none(batched_input)
 
             if args.use_amp:
-                masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter=True)
+                masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings,
+                                                                           decoder_iter=True)
                 loss = criterion(masks, labels, iou_predictions)
-                with amp.scale_loss(loss,  optimizer) as scaled_loss:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward(retain_graph=True)
             else:
-                masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings, decoder_iter=True)
+                masks, low_res_masks, iou_predictions = prompt_and_decoder(args, batched_input, model, image_embeddings,
+                                                                           decoder_iter=True)
                 loss = criterion(masks, labels, iou_predictions)
                 loss.backward(retain_graph=True)
-                
+
             optimizer.step()
             optimizer.zero_grad()
-          
+
             if iter != args.iter_point - 1:
                 point_num = random.choice(args.point_list)
                 batched_input = generate_point(masks, labels, low_res_masks, batched_input, point_num)
                 batched_input = to_device(batched_input, args.device)
-       
-            if int(batch+1) % 50 == 0:
-                if iter == init_mask_num or iter == args.iter_point - 1:
-                    print(f'Epoch: {epoch+1}, Batch: {batch+1}, mask prompt: {SegMetrics(masks, labels, args.metrics)}')
-                else:
-                    print(f'Epoch: {epoch+1}, Batch: {batch+1}, point {point_num} prompt: { SegMetrics(masks, labels, args.metrics)}')
 
-        if int(batch+1) % 200 == 0:
-            print(f"epoch:{epoch+1}, iteration:{batch+1}, loss:{loss.item()}")
-            save_path = os.path.join(f"{args.work_dir}/models", args.run_name, f"epoch{epoch+1}_batch{batch+1}_sam.pth")
+            if int(batch + 1) % 50 == 0:
+                if iter == init_mask_num or iter == args.iter_point - 1:
+                    print(
+                        f'Epoch: {epoch + 1}, Batch: {batch + 1}, mask prompt: {SegMetrics(masks, labels, args.metrics)}')
+                else:
+                    print(
+                        f'Epoch: {epoch + 1}, Batch: {batch + 1}, point {point_num} prompt: {SegMetrics(masks, labels, args.metrics)}')
+
+        if int(batch + 1) % 200 == 0:
+            print(f"epoch:{epoch + 1}, iteration:{batch + 1}, loss:{loss.item()}")
+            save_path = os.path.join(f"{args.work_dir}/models", args.run_name,
+                                     f"epoch{epoch + 1}_batch{batch + 1}_sam.pth")
             state = {'model': model.state_dict(), 'optimizer': optimizer}
             torch.save(state, save_path)
 
         train_losses.append(loss.item())
 
         gpu_info = {}
-        gpu_info['gpu_name'] = args.device 
+        gpu_info['gpu_name'] = args.device
         train_loader.set_postfix(train_loss=loss.item(), gpu_info=gpu_info)
 
         train_batch_metrics = SegMetrics(masks, labels, args.metrics)
@@ -219,14 +228,13 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
     return train_losses, train_iter_metrics
 
 
-
 def main(args):
-    model = sam_model_registry[args.model_type](args).to(args.device) 
+    model = sam_model_registry[args.model_type](args).to(args.device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion = FocalDiceloss_IoULoss()
 
     if args.lr_scheduler:
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10], gamma = 0.5)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10], gamma=0.5)
         print('*******Use MultiStepLR')
 
     if args.resume is not None:
@@ -242,11 +250,13 @@ def main(args):
     else:
         print('*******Do not use mixed precision')
 
-    train_dataset = TrainingDataset(args.data_path, image_size=args.image_size, mode='train', point_num=1, mask_num=args.mask_num, requires_name = False)
-    train_loader = DataLoader(train_dataset, batch_size = args.batch_size, shuffle=True, num_workers=4)
-    print('*******Train data:', len(train_dataset))   
+    train_dataset = TrainingDataset(args.data_path, image_size=args.image_size, mode='train', point_num=1,
+                                    mask_num=args.mask_num, requires_name=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    print('*******Train data:', len(train_dataset))
 
-    loggers = get_logger(os.path.join(args.work_dir, "logs", f"{args.run_name}_{datetime.datetime.now().strftime('%Y%m%d-%H%M.log')}"))
+    loggers = get_logger(
+        os.path.join(args.work_dir, "logs", f"{args.run_name}_{datetime.datetime.now().strftime('%Y%m%d-%H%M.log')}"))
 
     best_loss = 1e10
     l = len(train_loader)
@@ -262,7 +272,8 @@ def main(args):
             scheduler.step()
 
         train_iter_metrics = [metric / l for metric in train_iter_metrics]
-        train_metrics = {args.metrics[i]: '{:.4f}'.format(train_iter_metrics[i]) for i in range(len(train_iter_metrics))}
+        train_metrics = {args.metrics[i]: '{:.4f}'.format(train_iter_metrics[i]) for i in
+                         range(len(train_iter_metrics))}
 
         average_loss = np.mean(train_losses)
         lr = scheduler.get_last_lr()[0] if args.lr_scheduler is not None else args.lr
@@ -270,7 +281,7 @@ def main(args):
 
         if average_loss < best_loss:
             best_loss = average_loss
-            save_path = os.path.join(args.work_dir, "models", args.run_name, f"epoch{epoch+1}_sam.pth")
+            save_path = os.path.join(args.work_dir, "models", args.run_name, f"epoch{epoch + 1}_sam.pth")
             state = {'model': model.float().state_dict(), 'optimizer': optimizer}
             torch.save(state, save_path)
             if args.use_amp:
@@ -283,5 +294,3 @@ def main(args):
 if __name__ == '__main__':
     args = parse_args()
     main(args)
-
-

@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import sys
+
 sys.path.append(".")
 
 import torch
@@ -28,8 +29,8 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument(
     "--sam_checkpoint", type=str, required=True, help="The path to the SAM-Med2D model checkpoint."
-    "Usage: python3 scripts/export_onnx_model.py --checkpoint xxx/sam-med2d_b.pth \
-        --output xxx/sam-med2d_b.decoder.onnx --model-type vit_b --opset 12 --return-single-mask"
+                                                      "Usage: python3 scripts/export_onnx_model.py --checkpoint xxx/sam-med2d_b.pth \
+                                                          --output xxx/sam-med2d_b.decoder.onnx --model-type vit_b --opset 12 --return-single-mask"
 )
 
 parser.add_argument(
@@ -37,23 +38,23 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--device', 
-    type=str, 
+    '--device',
+    type=str,
     default='cpu'
 )
 
 parser.add_argument(
-    "--image_size", 
-    type=int, 
-    default=256, 
+    "--image_size",
+    type=int,
+    default=256,
     help="image_size"
 
 )
 
 parser.add_argument(
-    "--encoder_adapter", 
-    type=bool, 
-    default=True, 
+    "--encoder_adapter",
+    type=bool,
+    default=True,
     help="use adapter"
 )
 
@@ -130,15 +131,15 @@ parser.add_argument(
 
 
 def run_export(
-    args,
-    model_type: str,
-    output: str,
-    opset: int,
-    return_single_mask: bool,
-    gelu_approximate: bool = False,
-    use_stability_score: bool = False,
-    return_extra_metrics: bool = False,
-    resize_logest_img_size: bool = False,
+        args,
+        model_type: str,
+        output: str,
+        opset: int,
+        return_single_mask: bool,
+        gelu_approximate: bool = False,
+        use_stability_score: bool = False,
+        return_extra_metrics: bool = False,
+        resize_logest_img_size: bool = False,
 ):
     print("Loading model...")
     sam = sam_model_registry[model_type](args).to(args.device)

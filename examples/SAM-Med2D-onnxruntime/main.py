@@ -1,14 +1,13 @@
 import argparse
 import os
+from copy import deepcopy
+from typing import Any, Union
+
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import onnxruntime as ort
-import matplotlib.pyplot as plt
-
 from tqdm import tqdm
-from typing import Any, Union
-from copy import deepcopy
-
 
 parser = argparse.ArgumentParser(
     description="Inference an image with onnxruntime backend."
@@ -36,40 +35,45 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--input_size", 
-    type=int, 
-    default=256, 
+    "--input_size",
+    type=int,
+    default=256,
     help="input_size"
 )
 
 parser.add_argument(
-    "--work_dir", 
-    type=str, 
-    default="workdir", 
+    "--work_dir",
+    type=str,
+    default="workdir",
     help="work dir"
 )
 
 args = parser.parse_args()
 
+
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
+        color = np.array([30 / 255, 144 / 255, 255 / 255, 0.6])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
-    
+
+
 def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
-    
+    pos_points = coords[labels == 1]
+    neg_points = coords[labels == 0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white',
+               linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white',
+               linewidth=1.25)
+
+
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))   
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))
 
 
 class SamEncoder:
@@ -174,6 +178,7 @@ class SamEncoder:
 
     def __call__(self, img: np.array, *args: Any, **kwds: Any) -> Any:
         return self._extract_feature(img)
+
 
 class SamDecoder:
     """Sam decoder model.
@@ -307,6 +312,7 @@ class SamDecoder:
         boxes = self.apply_coords(boxes.reshape(-1, 2, 2), original_size, new_size)
         return boxes.reshape(-1, 4)
 
+
 def main():
     # Create save folder
     save_path = os.path.join(args.work_dir, 'ort_demo_results')
@@ -326,7 +332,7 @@ def main():
     '''Specifying a specific object with a point'''
     img_file = cv2.imread(args.img_path)
     img_embeddings = encoder(img_file)
-    
+
     origin_image_size = img_file.shape[:2]
     point_coords = np.array([[162, 127]], dtype=np.float32)
     point_labels = np.array([1], dtype=np.float32)
@@ -336,14 +342,14 @@ def main():
         point_coords=point_coords,
         point_labels=point_labels
     )
-    
-    plt.figure(figsize=(10,10))
+
+    plt.figure(figsize=(10, 10))
     plt.imshow(img_file)
     show_mask(masks, plt.gca())
     show_points(point_coords, point_labels, plt.gca())
     plt.axis('off')
-    plt.savefig(os.path.join(save_path, base_name+'_point1'+file_extension))
-    plt.show()  
+    plt.savefig(os.path.join(save_path, base_name + '_point1' + file_extension))
+    plt.show()
 
     '''Optimizing Segmentation Results by Point Interaction'''
     new_point_coords = np.array([[169, 140]], dtype=np.float32)
@@ -357,33 +363,33 @@ def main():
         origin_image_size=origin_image_size,
         point_coords=point_coords,
         point_labels=point_labels,
-        mask_input = mask_inputs,
+        mask_input=mask_inputs,
     )
 
-    plt.figure(figsize=(10,10))
+    plt.figure(figsize=(10, 10))
     plt.imshow(img_file)
     show_mask(masks, plt.gca())
     show_points(point_coords, point_labels, plt.gca())
     plt.axis('off')
-    plt.savefig(os.path.join(save_path, base_name+'_point2'+file_extension))
+    plt.savefig(os.path.join(save_path, base_name + '_point2' + file_extension))
     plt.show()
 
     '''Specifying a specific object with a bounding box'''
-    boxes = np.array([135,100,180,150])
+    boxes = np.array([135, 100, 180, 150])
 
     masks, _, _ = decoder.run(
         img_embeddings=img_embeddings,
         origin_image_size=origin_image_size,
         boxes=boxes,
     )
-    plt.figure(figsize=(10,10))
+    plt.figure(figsize=(10, 10))
     plt.imshow(img_file)
     show_mask(masks, plt.gca())
     show_box(boxes, plt.gca())
     plt.axis('off')
-    plt.savefig(os.path.join(save_path, base_name+'_box'+file_extension))
-    plt.show()  
- 
+    plt.savefig(os.path.join(save_path, base_name + '_box' + file_extension))
+    plt.show()
+
 
 if __name__ == '__main__':
     main()

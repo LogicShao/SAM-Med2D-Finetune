@@ -4,13 +4,13 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from copy import deepcopy
+from typing import Tuple
+
 import numpy as np
 import torch
 from torch.nn import functional as F
 from torchvision.transforms.functional import resize, to_pil_image  # type: ignore
-
-from copy import deepcopy
-from typing import Tuple
 
 
 class ResizeLongestSide:
@@ -64,7 +64,7 @@ class ResizeLongestSide:
         )
 
     def apply_coords_torch(
-        self, coords: torch.Tensor, original_size: Tuple[int, ...]
+            self, coords: torch.Tensor, original_size: Tuple[int, ...]
     ) -> torch.Tensor:
         """
         Expects a torch tensor with length 2 in the last dimension. Requires the
@@ -81,7 +81,7 @@ class ResizeLongestSide:
         return coords
 
     def apply_boxes_torch(
-        self, boxes: torch.Tensor, original_size: Tuple[int, ...]
+            self, boxes: torch.Tensor, original_size: Tuple[int, ...]
     ) -> torch.Tensor:
         """
         Expects a torch tensor with shape Bx4. Requires the original image

@@ -4,10 +4,13 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch
 from functools import partial
-from .modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
+
+import torch
 from torch.nn import functional as F
+
+from .modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
+
 
 def build_sam_vit_h(args):
     return _build_sam(
@@ -17,7 +20,7 @@ def build_sam_vit_h(args):
         encoder_global_attn_indexes=[7, 15, 23, 31],
         image_size=args.image_size,
         checkpoint=args.sam_checkpoint,
-        encoder_adapter = args.encoder_adapter,
+        encoder_adapter=args.encoder_adapter,
     )
 
 
@@ -32,7 +35,7 @@ def build_sam_vit_l(args):
         encoder_global_attn_indexes=[5, 11, 17, 23],
         image_size=args.image_size,
         checkpoint=args.sam_checkpoint,
-        encoder_adapter = args.encoder_adapter,
+        encoder_adapter=args.encoder_adapter,
     )
 
 
@@ -44,7 +47,7 @@ def build_sam_vit_b(args):
         encoder_global_attn_indexes=[2, 5, 8, 11],
         image_size=args.image_size,
         checkpoint=args.sam_checkpoint,
-        encoder_adapter = args.encoder_adapter,
+        encoder_adapter=args.encoder_adapter,
 
     )
 
@@ -58,13 +61,13 @@ sam_model_registry = {
 
 
 def _build_sam(
-    encoder_embed_dim,
-    encoder_depth,
-    encoder_num_heads,
-    encoder_global_attn_indexes,
-    image_size,
-    checkpoint,
-    encoder_adapter,
+        encoder_embed_dim,
+        encoder_depth,
+        encoder_num_heads,
+        encoder_global_attn_indexes,
+        image_size,
+        checkpoint,
+        encoder_adapter,
 ):
     prompt_embed_dim = 256
     image_size = image_size
@@ -80,11 +83,11 @@ def _build_sam(
             num_heads=encoder_num_heads,
             patch_size=vit_patch_size,
             qkv_bias=True,
-            use_rel_pos = True,
+            use_rel_pos=True,
             global_attn_indexes=encoder_global_attn_indexes,
             window_size=14,
             out_chans=prompt_embed_dim,
-            adapter_train = encoder_adapter,
+            adapter_train=encoder_adapter,
         ),
         prompt_encoder=PromptEncoder(
             embed_dim=prompt_embed_dim,
@@ -110,31 +113,31 @@ def _build_sam(
     # sam.train()
     if checkpoint is not None:
         with open(checkpoint, "rb") as f:
-            state_dict = torch.load(f, map_location="cpu")
+            state_dict = torch.load(f, map_location="cpu", weights_only=False)
         try:
             if 'model' in state_dict.keys():
                 print(encoder_adapter)
                 sam.load_state_dict(state_dict['model'], False)
             else:
-                if image_size==1024 and encoder_adapter==True:
+                if image_size == 1024 and encoder_adapter == True:
                     sam.load_state_dict(state_dict, False)
                 else:
                     sam.load_state_dict(state_dict)
         except:
             print('*******interpolate')
-            new_state_dict = load_from(sam, state_dict, image_size, vit_patch_size)   
+            new_state_dict = load_from(sam, state_dict, image_size, vit_patch_size)
             sam.load_state_dict(new_state_dict)
         print(f"*******load {checkpoint}")
-        
+
     return sam
 
 
 def load_from(sam, state_dicts, image_size, vit_patch_size):
-
     sam_dict = sam.state_dict()
     except_keys = ['mask_tokens', 'output_hypernetworks_mlps', 'iou_prediction_head']
     new_state_dict = {k: v for k, v in state_dicts.items() if
-                      k in sam_dict.keys() and except_keys[0] not in k and except_keys[1] not in k and except_keys[2] not in k}
+                      k in sam_dict.keys() and except_keys[0] not in k and except_keys[1] not in k and except_keys[
+                          2] not in k}
     pos_embed = new_state_dict['image_encoder.pos_embed']
     token_size = int(image_size // vit_patch_size)
     if pos_embed.shape[1] != token_size:
@@ -145,16 +148,16 @@ def load_from(sam, state_dicts, image_size, vit_patch_size):
         new_state_dict['image_encoder.pos_embed'] = pos_embed
         rel_pos_keys = [k for k in sam_dict.keys() if 'rel_pos' in k]
 
-        global_rel_pos_keys = [k for k in rel_pos_keys if 
-                                                        '2' in k or 
-                                                        '5' in k or 
-                                                        '7' in k or 
-                                                        '8' in k or 
-                                                        '11' in k or 
-                                                        '13' in k or
-                                                        '15' in k or 
-                                                        '23' in k or 
-                                                        '31' in k] 
+        global_rel_pos_keys = [k for k in rel_pos_keys if
+                               '2' in k or
+                               '5' in k or
+                               '7' in k or
+                               '8' in k or
+                               '11' in k or
+                               '13' in k or
+                               '15' in k or
+                               '23' in k or
+                               '31' in k]
         # print(sam_dict)
         for k in global_rel_pos_keys:
             h_check, w_check = sam_dict[k].shape
@@ -168,4 +171,3 @@ def load_from(sam, state_dicts, image_size, vit_patch_size):
 
     sam_dict.update(new_state_dict)
     return sam_dict
-

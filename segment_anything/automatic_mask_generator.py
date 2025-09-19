@@ -4,11 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
-
-from typing import Any, Dict, List, Optional, Tuple
 
 from .modeling import Sam
 from .predictor import SamPredictor
@@ -34,21 +34,21 @@ from .utils.amg import (
 
 class SamAutomaticMaskGenerator:
     def __init__(
-        self,
-        model: Sam,
-        points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
-        pred_iou_thresh: float = 0.88,
-        stability_score_thresh: float = 0.95,
-        stability_score_offset: float = 1.0,
-        box_nms_thresh: float = 0.7,
-        crop_n_layers: int = 0,
-        crop_nms_thresh: float = 0.7,
-        crop_overlap_ratio: float = 512 / 1500,
-        crop_n_points_downscale_factor: int = 1,
-        point_grids: Optional[List[np.ndarray]] = None,
-        min_mask_region_area: int = 0,
-        output_mode: str = "binary_mask",
+            self,
+            model: Sam,
+            points_per_side: Optional[int] = 32,
+            points_per_batch: int = 64,
+            pred_iou_thresh: float = 0.88,
+            stability_score_thresh: float = 0.95,
+            stability_score_offset: float = 1.0,
+            box_nms_thresh: float = 0.7,
+            crop_n_layers: int = 0,
+            crop_nms_thresh: float = 0.7,
+            crop_overlap_ratio: float = 512 / 1500,
+            crop_n_points_downscale_factor: int = 1,
+            point_grids: Optional[List[np.ndarray]] = None,
+            min_mask_region_area: int = 0,
+            output_mode: str = "binary_mask",
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
@@ -96,7 +96,7 @@ class SamAutomaticMaskGenerator:
         """
 
         assert (points_per_side is None) != (
-            point_grids is None
+                point_grids is None
         ), "Exactly one of points_per_side or point_grid must be provided."
         if points_per_side is not None:
             self.point_grids = build_all_layer_point_grids(
@@ -223,11 +223,11 @@ class SamAutomaticMaskGenerator:
         return data
 
     def _process_crop(
-        self,
-        image: np.ndarray,
-        crop_box: List[int],
-        crop_layer_idx: int,
-        orig_size: Tuple[int, ...],
+            self,
+            image: np.ndarray,
+            crop_box: List[int],
+            crop_layer_idx: int,
+            orig_size: Tuple[int, ...],
     ) -> MaskData:
         # Crop the image and calculate embeddings
         x0, y0, x1, y1 = crop_box
@@ -264,11 +264,11 @@ class SamAutomaticMaskGenerator:
         return data
 
     def _process_batch(
-        self,
-        points: np.ndarray,
-        im_size: Tuple[int, ...],
-        crop_box: List[int],
-        orig_size: Tuple[int, ...],
+            self,
+            points: np.ndarray,
+            im_size: Tuple[int, ...],
+            crop_box: List[int],
+            orig_size: Tuple[int, ...],
     ) -> MaskData:
         orig_h, orig_w = orig_size
 
@@ -322,7 +322,7 @@ class SamAutomaticMaskGenerator:
 
     @staticmethod
     def postprocess_small_regions(
-        mask_data: MaskData, min_area: int, nms_thresh: float
+            mask_data: MaskData, min_area: int, nms_thresh: float
     ) -> MaskData:
         """
         Removes small disconnected regions and holes in masks, then reruns

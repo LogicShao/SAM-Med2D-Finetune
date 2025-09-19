@@ -1,11 +1,13 @@
-import numpy as np
-import torch
-from typing import Optional, Tuple
-from torch.nn import functional as F
 from copy import deepcopy
-from albumentations.pytorch import ToTensorV2
+from typing import Optional, Tuple
+
 import albumentations as A
 import cv2
+import numpy as np
+import torch
+from albumentations.pytorch import ToTensorV2
+from torch.nn import functional as F
+
 
 class SammedPredictor:
     def __init__(self, sam_model):
@@ -14,10 +16,9 @@ class SammedPredictor:
         self.model = sam_model
         self.devices = sam_model.device
         self.reset_image()
-        
 
-    def set_image(self,image: np.ndarray, image_format: str = "RGB") -> None:
-        assert image_format in ["RGB","BGR",], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
+    def set_image(self, image: np.ndarray, image_format: str = "RGB") -> None:
+        assert image_format in ["RGB", "BGR", ], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
         if image_format != self.model.image_format:
             image = image[..., ::-1]
 
@@ -35,24 +36,24 @@ class SammedPredictor:
         transforms = self.transforms(self.new_size)
         augments = transforms(image=input_image)
         input_image = augments['image'][None, :, :, :]
-    
+
         assert (
-            len(input_image.shape) == 4
-            and input_image.shape[1] == 3
-            and max(*input_image.shape[2:]) == self.model.image_encoder.img_size
+                len(input_image.shape) == 4
+                and input_image.shape[1] == 3
+                and max(*input_image.shape[2:]) == self.model.image_encoder.img_size
         ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
 
         self.features = self.model.image_encoder(input_image.to(self.device))
         self.is_image_set = True
 
     def predict(
-        self,
-        point_coords: Optional[np.ndarray] = None,
-        point_labels: Optional[np.ndarray] = None,
-        box: Optional[np.ndarray] = None,
-        mask_input: Optional[np.ndarray] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
+            self,
+            point_coords: Optional[np.ndarray] = None,
+            point_labels: Optional[np.ndarray] = None,
+            box: Optional[np.ndarray] = None,
+            mask_input: Optional[np.ndarray] = None,
+            multimask_output: bool = True,
+            return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         if not self.is_image_set:
@@ -62,9 +63,9 @@ class SammedPredictor:
         coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
         if point_coords is not None:
             assert (
-                point_labels is not None
+                    point_labels is not None
             ), "point_labels must be supplied if point_coords is supplied."
-            
+
             point_coords = self.apply_coords(point_coords, self.original_size, self.new_size)
             coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=self.device)
             labels_torch = torch.as_tensor(point_labels, dtype=torch.int, device=self.device)
@@ -94,13 +95,13 @@ class SammedPredictor:
 
     @torch.no_grad()
     def predict_torch(
-        self,
-        point_coords: Optional[torch.Tensor],
-        point_labels: Optional[torch.Tensor],
-        boxes: Optional[torch.Tensor] = None,
-        mask_input: Optional[torch.Tensor] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
+            self,
+            point_coords: Optional[torch.Tensor],
+            point_labels: Optional[torch.Tensor],
+            boxes: Optional[torch.Tensor] = None,
+            mask_input: Optional[torch.Tensor] = None,
+            multimask_output: bool = True,
+            return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         if not self.is_image_set:
@@ -115,8 +116,8 @@ class SammedPredictor:
             mask_list = []
             # Embed prompts
             for i in range(boxes.shape[0]):
-                pre_boxes = boxes[i:i+1,...]
-         
+                pre_boxes = boxes[i:i + 1, ...]
+
                 sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
                     points=points,
                     boxes=pre_boxes,
@@ -140,7 +141,7 @@ class SammedPredictor:
 
                 # Upscale the masks to the original image resolution
                 pre_masks = self.postprocess_masks(low_res_masks, self.model.image_encoder.img_size, self.original_size)
-        
+
                 mask_list.append(pre_masks)
             masks = torch.cat(mask_list, dim=0)
 
@@ -169,20 +170,18 @@ class SammedPredictor:
 
             # Upscale the masks to the original image resolution
             masks = self.postprocess_masks(low_res_masks, self.model.image_encoder.img_size, self.original_size)
-        
+
         if not return_logits:
             sigmoid_output = torch.sigmoid(masks)
             masks = (sigmoid_output > 0.5).float()
- 
+
         return masks, iou_predictions, low_res_masks
 
-  
     def postprocess_masks(self, low_res_masks, image_size, original_size):
         ori_h, ori_w = original_size
-        masks = F.interpolate(low_res_masks,(image_size, image_size), mode="bilinear", align_corners=False)
+        masks = F.interpolate(low_res_masks, (image_size, image_size), mode="bilinear", align_corners=False)
         masks = F.interpolate(masks, original_size, mode="bilinear", align_corners=False)
         return masks
-
 
     def apply_coords(self, coords, original_size, new_size):
         old_h, old_w = original_size
@@ -197,7 +196,6 @@ class SammedPredictor:
         boxes = self.apply_coords(boxes.reshape(-1, 2, 2), original_size, new_size)
         return boxes.reshape(-1, 4)
 
-
     def apply_coords_torch(self, coords, original_size, new_size):
         old_h, old_w = original_size
         new_h, new_w = new_size
@@ -209,7 +207,6 @@ class SammedPredictor:
     def apply_boxes_torch(self, boxes, original_size, new_size):
         boxes = self.apply_coords_torch(boxes.reshape(-1, 2, 2), original_size, new_size)
         return boxes.reshape(-1, 4)
-
 
     def get_image_embedding(self) -> torch.Tensor:
         """
@@ -223,7 +220,6 @@ class SammedPredictor:
             )
         assert self.features is not None, "Features must exist if an image has been set."
         return self.features
-
 
     def transforms(self, new_size):
         Transforms = []

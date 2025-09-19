@@ -4,14 +4,14 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from typing import Tuple
-
-from ..modeling import Sam
 from .amg import calculate_stability_score
+from ..modeling import Sam
 
 
 class SamOnnxModel(nn.Module):
@@ -23,12 +23,12 @@ class SamOnnxModel(nn.Module):
     """
 
     def __init__(
-        self,
-        model: Sam,
-        return_single_mask: bool,
-        use_stability_score: bool = False,
-        return_extra_metrics: bool = False,
-        resize_logest_img_size: bool = False,
+            self,
+            model: Sam,
+            return_single_mask: bool,
+            use_stability_score: bool = False,
+            return_extra_metrics: bool = False,
+            resize_logest_img_size: bool = False,
     ) -> None:
         super().__init__()
         self.mask_decoder = model.mask_decoder
@@ -42,7 +42,7 @@ class SamOnnxModel(nn.Module):
 
     @staticmethod
     def resize_longest_image_size(
-        input_image_size: torch.Tensor, longest_side: int
+            input_image_size: torch.Tensor, longest_side: int
     ) -> torch.Tensor:
         input_image_size = input_image_size.to(torch.float32)
         scale = longest_side / torch.max(input_image_size)
@@ -58,7 +58,7 @@ class SamOnnxModel(nn.Module):
 
         point_embedding = point_embedding * (point_labels != -1)
         point_embedding = point_embedding + self.model.prompt_encoder.not_a_point_embed.weight * (
-            point_labels == -1
+                point_labels == -1
         )
 
         for i in range(self.model.prompt_encoder.num_point_embeddings):
@@ -71,7 +71,7 @@ class SamOnnxModel(nn.Module):
     def _embed_masks(self, input_mask: torch.Tensor, has_mask_input: torch.Tensor) -> torch.Tensor:
         mask_embedding = has_mask_input * self.model.prompt_encoder.mask_downscaling(input_mask)
         mask_embedding = mask_embedding + (
-            1 - has_mask_input
+                1 - has_mask_input
         ) * self.model.prompt_encoder.no_mask_embed.weight.reshape(1, -1, 1, 1)
         return mask_embedding
 
@@ -92,14 +92,14 @@ class SamOnnxModel(nn.Module):
         return masks
 
     def mask_postprocessing_without_rescale(self, masks: torch.Tensor, orig_im_size: torch.Tensor) -> torch.Tensor:
-        masks = F.interpolate(masks,(self.img_size, self.img_size), mode="bilinear", align_corners=False)
+        masks = F.interpolate(masks, (self.img_size, self.img_size), mode="bilinear", align_corners=False)
         orig_im_size = orig_im_size.to(torch.int64)
         h, w = orig_im_size[0], orig_im_size[1]
         masks = F.interpolate(masks, size=(h, w), mode="bilinear", align_corners=False)
         return masks
 
     def select_masks(
-        self, masks: torch.Tensor, iou_preds: torch.Tensor, num_points: int
+            self, masks: torch.Tensor, iou_preds: torch.Tensor, num_points: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Determine if we should return the multiclick mask or not from the number of points.
         # The reweighting is used to avoid control flow.
@@ -115,13 +115,13 @@ class SamOnnxModel(nn.Module):
 
     @torch.no_grad()
     def forward(
-        self,
-        image_embeddings: torch.Tensor,
-        point_coords: torch.Tensor,
-        point_labels: torch.Tensor,
-        mask_input: torch.Tensor,
-        has_mask_input: torch.Tensor,
-        orig_im_size: torch.Tensor,
+            self,
+            image_embeddings: torch.Tensor,
+            point_coords: torch.Tensor,
+            point_labels: torch.Tensor,
+            mask_input: torch.Tensor,
+            has_mask_input: torch.Tensor,
+            orig_im_size: torch.Tensor,
     ):
         sparse_embedding = self._embed_points(point_coords, point_labels)
         dense_embedding = self._embed_masks(mask_input, has_mask_input)

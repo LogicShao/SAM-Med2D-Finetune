@@ -1,15 +1,13 @@
 import sys
+
 sys.path.append('.')
 
 import os
-import cv2
 import onnx
 import pathlib
 import shutil
 import argparse
 import warnings
-import numpy as np
-import albumentations as A
 
 import torch
 import torch.nn as nn
@@ -25,7 +23,6 @@ try:
     onnxruntime_exists = True
 except ImportError:
     onnxruntime_exists = False
-
 
 parser = argparse.ArgumentParser(
     description="Export the model to ONNX format with encoder support."
@@ -63,23 +60,23 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--device', 
-    type=str, 
+    '--device',
+    type=str,
     default='cpu'
 )
 
 parser.add_argument(
-    "--image_size", 
-    type=int, 
-    default=256, 
+    "--image_size",
+    type=int,
+    default=256,
     help="image_size"
 
 )
 
 parser.add_argument(
-    "--encoder_adapter", 
-    type=bool, 
-    default=True, 
+    "--encoder_adapter",
+    type=bool,
+    default=True,
     help="use adapter"
 )
 
@@ -102,18 +99,18 @@ parser.add_argument(
     ),
 )
 
-class OnnxEncoderModel(nn.Module):
 
+class OnnxEncoderModel(nn.Module):
     pixel_mean = [123.675, 116.28, 103.53]
-    pixel_std  = [58.395, 57.12, 57.375]
+    pixel_std = [58.395, 57.12, 57.375]
 
     def __init__(
-        self,
-        model: Sam,
-        input_size: tuple = (256, 256),
-        pixel_mean: list = [123.675, 116.28, 103.53],
-        pixel_std: list=[58.395, 57.12, 57.375],
-        use_preprocess: bool = False
+            self,
+            model: Sam,
+            input_size: tuple = (256, 256),
+            pixel_mean: list = [123.675, 116.28, 103.53],
+            pixel_std: list = [58.395, 57.12, 57.375],
+            use_preprocess: bool = False
     ):
         super().__init__()
         self.use_preprocess = use_preprocess
@@ -122,7 +119,7 @@ class OnnxEncoderModel(nn.Module):
         self.input_size = input_size
         self.model = model
         self.image_encoder = model.image_encoder
-    
+
     @torch.no_grad()
     def forward(self, input_image: torch.Tensor):
         if self.use_preprocess:
