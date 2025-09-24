@@ -160,8 +160,11 @@ cython_debug/
 .idea/
 
 brats_finetune_output/
+brats_finetune_output*/
 dataset_for_SAM-Med2D/
+dataset_for_SAM-Med2D*/
 pretrain_model/
+plots/
 
 *.pt
 *.pth

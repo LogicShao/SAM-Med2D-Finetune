@@ -1,4 +1,4 @@
-python evaluate_finetune.py \
+python LoRA_finetune/evaluate_finetune.py \
     --data_path dataset_for_SAM-Med2D/test \
     --work_dir ./brats_finetune_output \
     --batch_size 128 \
@@ -7,7 +7,7 @@ python evaluate_finetune.py \
     --metrics dice iou \
     --subset_size 200
 
-python evaluate_finetune.py \
+python LoRA_finetune/evaluate_finetune.py \
     --data_path dataset_for_SAM-Med2D/test \
     --sam_checkpoint ./pretrain_model/sam-med2d_b.pth \
     --batch_size 128 \
