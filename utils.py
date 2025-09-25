@@ -9,6 +9,8 @@ import torch.nn as nn
 from albumentations.pytorch import ToTensorV2
 from skimage.measure import label, regionprops
 
+os.environ["ALBUMENTATIONS_DISABLE_VERSION_CHECK"] = "1"
+
 
 def get_boxes_from_mask(mask, box_num=1, std=0.1, max_pixel=5):
     """
@@ -161,30 +163,39 @@ def train_transforms(img_size, ori_h, ori_w):
     transforms = []
     if ori_h < img_size and ori_w < img_size:
         transforms.append(
-            A.PadIfNeeded(min_height=img_size, min_width=img_size, border_mode=cv2.BORDER_CONSTANT, value=(0, 0, 0)))
+            A.PadIfNeeded(min_height=img_size, min_width=img_size, border_mode=cv2.BORDER_CONSTANT))
     else:
         transforms.append(A.Resize(int(img_size), int(img_size), interpolation=cv2.INTER_NEAREST))
     transforms.append(ToTensorV2(p=1.0))
     return A.Compose(transforms, p=1.)
 
 
-def get_logger(filename, verbosity=1, name=None):
-    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
-    formatter = logging.Formatter(
-        "[%(asctime)s][%(filename)s][line:%(lineno)d][%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(name)
-    logger.setLevel(level_dict[verbosity])
+def get_logger(filename):
+    """
+    配置日志记录器，区分文件和终端的输出级别。
+    """
+    # 创建 logger 对象
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)  # 设置 logger 的最低处理级别
 
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    # --- 文件处理器 (FileHandler) ---
+    # 记录所有 INFO 及以上级别的信息到文件
+    fh = logging.FileHandler(filename, mode='a', encoding='utf-8')
+    fh.setLevel(logging.INFO)
 
-    fh = logging.FileHandler(filename, "w", encoding='utf-8')
+    # --- 终端处理器 (StreamHandler) ---
+    # 只在终端显示 WARNING 及以上级别的关键信息
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARNING)  # <--- 关键修改
+
+    # 定义输出格式
+    formatter = logging.Formatter("[%(asctime)s][%(filename)s][line:%(lineno)d][%(levelname)s] %(message)s")
     fh.setFormatter(formatter)
-    logger.addHandler(fh)
+    ch.setFormatter(formatter)
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logger.addHandler(sh)
+    # 添加处理器到 logger
+    logger.addHandler(fh)
+    logger.addHandler(ch)
 
     return logger
 

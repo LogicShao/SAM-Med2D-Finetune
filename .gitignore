@@ -159,13 +159,10 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
-brats_finetune_output/
-brats_finetune_output*/
-dataset_for_SAM-Med2D/
-dataset_for_SAM-Med2D*/
 pretrain_model/
-plots/
-
+data_brats_raw/
+data_brats_processed/
+workdir*/
 *.pt
 *.pth
 *.ckpt
