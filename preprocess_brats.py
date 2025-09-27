@@ -9,7 +9,6 @@ import nibabel as nib
 import numpy as np
 from tqdm import tqdm
 
-# 配置日志，使其在终端提供清晰的输出
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 

@@ -160,8 +160,7 @@ cython_debug/
 .idea/
 
 pretrain_model/
-data_brats_raw/
-data_brats_processed/
+data_brats*/
 workdir*/
 *.pt
 *.pth

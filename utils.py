@@ -9,7 +9,7 @@ import torch.nn as nn
 from albumentations.pytorch import ToTensorV2
 from skimage.measure import label, regionprops
 
-os.environ["ALBUMENTATIONS_DISABLE_VERSION_CHECK"] = "1"
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
 
 def get_boxes_from_mask(mask, box_num=1, std=0.1, max_pixel=5):

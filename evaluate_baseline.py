@@ -8,7 +8,7 @@ from torch.amp import autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from DataLoader import SAMDataset  # 使用我们优化后的统一 Dataset
+from DataLoader import SAMDataset
 from metrics import SegMetrics
 from segment_anything import sam_model_registry
 from utils import FocalDiceloss_IoULoss, get_logger
