@@ -7,8 +7,8 @@ def main():
     cmd = [
         sys.executable, "train_singletask.py",  # 使用当前 python 解释器
         "--finetune_method", "adapter",
-        "--data_path", "data_brats_WT_TC_ET",
-        "--work_dir", "workdir_label_WT_TC_ET",
+        "--data_path", "data_brats_WT_TC",
+        "--work_dir", "workdir_label_WT_TC",
         "--run_name", "single_task",
         "--model_type", "vit_b",
         "--sam_checkpoint", "pretrain_model/sam-med2d_b.pth",

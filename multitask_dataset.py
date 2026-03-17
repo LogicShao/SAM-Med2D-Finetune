@@ -1,5 +1,7 @@
 import os
 
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
 import SimpleITK as sitk
 import albumentations as A
 import cv2

@@ -6,8 +6,8 @@ def main():
     cmd = [
         sys.executable, "train_singletask.py",
         "--finetune_method", "lora",
-        "--data_path", "data_brats_WT_TC_ET",
-        "--work_dir", "workdir_label_WT_TC_ET",
+        "--data_path", "data_brats_WT_TC",
+        "--work_dir", "workdir_label_WT_TC",
         "--run_name", "single_task",
         "--model_type", "vit_b",
         "--sam_checkpoint", "pretrain_model/sam-med2d_b.pth",
