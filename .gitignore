@@ -166,3 +166,4 @@ workdir*/
 *.pth
 *.ckpt
 temp/
+outputs/
