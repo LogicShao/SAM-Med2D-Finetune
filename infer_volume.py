@@ -22,16 +22,41 @@ class FullImageBoxPromptProvider:
     def __init__(self, image_size):
         self.image_size = image_size
 
-    def get_boxes(self, class_index, slice_index):
-        del class_index, slice_index
+    def should_skip_slice(self, slice_index, brats_case):
+        del slice_index, brats_case
+        return False
+
+    def get_boxes(self, class_index, slice_index, brats_case):
+        del class_index, slice_index, brats_case
         return torch.tensor(
             [[[0.0, 0.0, float(self.image_size - 1), float(self.image_size - 1)]]],
             dtype=torch.float32,
         )
 
 
+class UpperBoundPromptProvider:
+    def __init__(self, image_size):
+        self.image_size = image_size
+
+    def should_skip_slice(self, slice_index, brats_case):
+        if not brats_case.has_segmentation():
+            raise ValueError("prompt_mode=upper_bound requires '*_seg.nii.gz' to be present in the case directory.")
+        return not brats_case.slice_has_any_gt(slice_index)
+
+    def get_boxes(self, class_index, slice_index, brats_case):
+        if not brats_case.has_segmentation():
+            raise ValueError("prompt_mode=upper_bound requires '*_seg.nii.gz' to be present in the case directory.")
+
+        class_name = CLASS_NAMES[class_index]
+        gt_box = brats_case.get_gt_box(class_name, slice_index, image_size=self.image_size)
+        if gt_box is None:
+            return None
+        return torch.tensor([[gt_box]], dtype=torch.float32)
+
+
 PROMPT_PROVIDERS = {
     "full_image_box": FullImageBoxPromptProvider,
+    "upper_bound": UpperBoundPromptProvider,
 }
 
 
@@ -86,6 +111,9 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
 
     with torch.no_grad():
         for slice_index in tqdm(range(depth), desc=f"Infer {brats_case.case_id}"):
+            if prompt_provider.should_skip_slice(slice_index=slice_index, brats_case=brats_case):
+                continue
+
             slice_tensor = brats_case.get_slice_tensor(slice_index, image_size)
             input_tensor = torch.from_numpy(slice_tensor).unsqueeze(0).to(device=device, dtype=torch.float32)
 
@@ -94,7 +122,13 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                 dense_pe = model.prompt_encoder.get_dense_pe()
 
                 for class_index, class_name in enumerate(CLASS_NAMES):
-                    boxes = prompt_provider.get_boxes(class_index=class_index, slice_index=slice_index)
+                    boxes = prompt_provider.get_boxes(
+                        class_index=class_index,
+                        slice_index=slice_index,
+                        brats_case=brats_case,
+                    )
+                    if boxes is None:
+                        continue
                     boxes = boxes.to(device=device, dtype=torch.float32)
                     sparse_embeddings, dense_embeddings = model.prompt_encoder(
                         points=None,
@@ -233,6 +267,7 @@ def build_case_meta(
         "modality_paths": {
             key: str(path.resolve()) for key, path in brats_case.modality_paths.items()
         },
+        "segmentation_path": str(brats_case.segmentation_path.resolve()) if brats_case.segmentation_path else None,
         "postprocess": {
             **postprocess_config,
             "report_path": str(postprocess_report_path.resolve()) if postprocess_report_path else None,
