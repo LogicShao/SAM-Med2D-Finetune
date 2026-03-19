@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import cv2
@@ -16,6 +17,8 @@ from postprocess_3d import postprocess_brats_masks
 
 
 CLASS_NAMES = ("ET", "TC", "WT")
+DEFAULT_YOLO_CHECKPOINT = "workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.pt"
+DEFAULT_YOLO_IMGSZ = 320
 
 
 class FullImageBoxPromptProvider:
@@ -54,9 +57,93 @@ class UpperBoundPromptProvider:
         return torch.tensor([[gt_box]], dtype=torch.float32)
 
 
+def _configure_ultralytics_env(config_dir=".ultralytics"):
+    config_dir = Path(config_dir).resolve()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("YOLOv8_DIR", str(config_dir))
+    os.environ.setdefault("YOLO_CONFIG_DIR", str(config_dir))
+    os.environ.setdefault("ULTRALYTICS_CONFIG_DIR", str(config_dir))
+    return config_dir
+
+
+class YoloBoxPromptProvider:
+    def __init__(self, image_size, yolo_checkpoint, yolo_conf, device):
+        self.image_size = image_size
+        self.yolo_checkpoint = Path(yolo_checkpoint).resolve()
+        self.yolo_conf = float(yolo_conf)
+        self.device = self._normalize_device(device)
+        self._slice_cache = {}
+
+        if not self.yolo_checkpoint.is_file():
+            raise FileNotFoundError(f"YOLO checkpoint not found: {self.yolo_checkpoint}")
+
+        _configure_ultralytics_env()
+        from ultralytics import YOLO
+
+        self.model = YOLO(str(self.yolo_checkpoint))
+
+    @staticmethod
+    def _normalize_device(device):
+        device = str(device)
+        if device == "cuda":
+            return "0"
+        if device.startswith("cuda:"):
+            return device.split(":", 1)[1]
+        return device
+
+    def _predict_box(self, slice_index, brats_case):
+        cache_key = (brats_case.case_id, int(slice_index))
+        if cache_key in self._slice_cache:
+            return self._slice_cache[cache_key]
+
+        pseudo_rgb = brats_case.get_pseudo_rgb_slice(slice_index)
+        result = self.model.predict(
+            source=pseudo_rgb,
+            conf=self.yolo_conf,
+            iou=0.60,
+            imgsz=DEFAULT_YOLO_IMGSZ,
+            device=self.device,
+            max_det=1,
+            save=False,
+            verbose=False,
+        )[0]
+
+        box = None
+        if result.boxes is not None and len(result.boxes) > 0:
+            xyxy = result.boxes.xyxy.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            top_index = int(np.argmax(confs))
+            top_conf = float(confs[top_index])
+            if top_conf >= self.yolo_conf:
+                height, width = brats_case.shape[:2]
+                scale_x = float(self.image_size) / float(width)
+                scale_y = float(self.image_size) / float(height)
+                x1, y1, x2, y2 = xyxy[top_index].tolist()
+                box = [
+                    float(np.clip(x1 * scale_x, 0.0, self.image_size - 1.0)),
+                    float(np.clip(y1 * scale_y, 0.0, self.image_size - 1.0)),
+                    float(np.clip(x2 * scale_x, 0.0, self.image_size - 1.0)),
+                    float(np.clip(y2 * scale_y, 0.0, self.image_size - 1.0)),
+                ]
+
+        self._slice_cache[cache_key] = box
+        return box
+
+    def should_skip_slice(self, slice_index, brats_case):
+        return self._predict_box(slice_index, brats_case) is None
+
+    def get_boxes(self, class_index, slice_index, brats_case):
+        del class_index
+        box = self._predict_box(slice_index, brats_case)
+        if box is None:
+            return None
+        return torch.tensor([[box]], dtype=torch.float32)
+
+
 PROMPT_PROVIDERS = {
     "full_image_box": FullImageBoxPromptProvider,
     "upper_bound": UpperBoundPromptProvider,
+    "yolo_box": YoloBoxPromptProvider,
 }
 
 
@@ -86,6 +173,8 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
+    parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
+    parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--postprocess", type=str_to_bool, default=False)
     parser.add_argument("--closing_radius", type=int, default=1)
     parser.add_argument("--opening_radius", type=int, default=1)
@@ -96,8 +185,16 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_prompt_provider(prompt_mode, image_size):
-    return PROMPT_PROVIDERS[prompt_mode](image_size=image_size)
+def build_prompt_provider(prompt_mode, image_size, yolo_checkpoint=None, yolo_conf=0.05, device="cpu"):
+    provider_class = PROMPT_PROVIDERS[prompt_mode]
+    if prompt_mode == "yolo_box":
+        return provider_class(
+            image_size=image_size,
+            yolo_checkpoint=yolo_checkpoint,
+            yolo_conf=yolo_conf,
+            device=device,
+        )
+    return provider_class(image_size=image_size)
 
 
 def run_volume_inference(model, brats_case, prompt_provider, image_size, threshold, device, use_amp):
@@ -240,6 +337,7 @@ def build_case_meta(
     threshold,
     postprocess_config,
     postprocess_report_path=None,
+    yolo_config=None,
 ):
     return {
         "case_id": brats_case.case_id,
@@ -272,6 +370,7 @@ def build_case_meta(
             **postprocess_config,
             "report_path": str(postprocess_report_path.resolve()) if postprocess_report_path else None,
         },
+        "yolo": yolo_config,
     }
 
 
@@ -281,7 +380,13 @@ def main():
     device = torch.device(args.device)
 
     brats_case = BraTSCase.from_dir(args.case_dir)
-    prompt_provider = build_prompt_provider(args.prompt_mode, args.image_size)
+    prompt_provider = build_prompt_provider(
+        args.prompt_mode,
+        args.image_size,
+        yolo_checkpoint=args.yolo_checkpoint,
+        yolo_conf=args.yolo_conf,
+        device=args.device,
+    )
     model = load_multitask_model(
         model_type=args.model_type,
         image_size=args.image_size,
@@ -371,6 +476,11 @@ def main():
         threshold=args.threshold,
         postprocess_config=postprocess_config,
         postprocess_report_path=postprocess_report_path,
+        yolo_config={
+            "checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
+            "conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
+            "imgsz": DEFAULT_YOLO_IMGSZ if args.prompt_mode == "yolo_box" else None,
+        },
     )
     save_case_meta(brats_case, output_dir, meta)
 

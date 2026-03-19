@@ -9,6 +9,7 @@ import numpy as np
 
 
 BRATS_MODALITIES = ("t1", "t1ce", "t2", "flair")
+YOLO_MODALITIES = ("t1ce", "t2", "flair")
 CLASS_NAMES = ("ET", "TC", "WT")
 
 
@@ -153,6 +154,13 @@ class BraTSCase:
             resized = cv2.resize(slice_2d, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
             channels.append(resized)
         return np.stack(channels, axis=0).astype(np.float32)
+
+    def get_pseudo_rgb_slice(self, slice_index):
+        channels = []
+        for modality in YOLO_MODALITIES:
+            slice_2d = self.normalized_volumes[modality][:, :, slice_index]
+            channels.append(np.clip(slice_2d * 255.0, 0, 255).astype(np.uint8))
+        return np.stack(channels, axis=-1)
 
     def save_nifti(self, volume, output_path):
         header = self.header.copy()

@@ -11,6 +11,8 @@ import torch
 from brats_case import BraTSCase
 from infer_volume import (
     CLASS_NAMES,
+    DEFAULT_YOLO_CHECKPOINT,
+    DEFAULT_YOLO_IMGSZ,
     build_case_meta,
     build_combined_label,
     build_postprocess_config,
@@ -47,6 +49,8 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
+    parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
+    parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--postprocess", type=str_to_bool, default=True)
     parser.add_argument("--closing_radius", type=int, default=1)
     parser.add_argument("--opening_radius", type=int, default=1)
@@ -388,6 +392,11 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         threshold=args.threshold,
         postprocess_config=postprocess_config,
         postprocess_report_path=postprocess_report_path,
+        yolo_config={
+            "checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
+            "conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
+            "imgsz": DEFAULT_YOLO_IMGSZ if args.prompt_mode == "yolo_box" else None,
+        },
     )
     save_case_meta(brats_case, output_dir, meta)
 
@@ -431,7 +440,13 @@ def main():
         input_channels=args.input_channels,
         encoder_adapter=args.encoder_adapter,
     )
-    prompt_provider = build_prompt_provider(args.prompt_mode, args.image_size)
+    prompt_provider = build_prompt_provider(
+        args.prompt_mode,
+        args.image_size,
+        yolo_checkpoint=args.yolo_checkpoint,
+        yolo_conf=args.yolo_conf,
+        device=args.device,
+    )
 
     results = []
     failures = []
@@ -463,6 +478,8 @@ def main():
             "image_size": args.image_size,
             "threshold": args.threshold,
             "device": str(device),
+            "yolo_checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
+            "yolo_conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
             "postprocess": build_postprocess_config(
                 enabled=args.postprocess,
                 closing_radius=args.closing_radius,

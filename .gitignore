@@ -167,3 +167,5 @@ workdir*/
 *.ckpt
 temp/
 outputs/
+.ultralytics*/
+datasets/

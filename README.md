@@ -200,7 +200,41 @@ workdir_xxx/
 - 单任务 LoRA 明显优于基线，但峰值略低于 Adapter。
 - 多任务 LoRA 的指标低于单任务结果，符合任务更复杂、输出类别更多的预期。
 
-## 8. 注意事项
+## 8. 整病例推理与端到端进展
+
+当前仓库已经不再停留在“只会训练”的阶段，而是完成了从原始 BraTS 病例到 3D `NIfTI` 输出、后处理和可视化预览的闭环：
+
+- 已新增整病例推理入口 `infer_volume.py`，支持对单个 BraTS 病例输出 `ET.nii.gz`、`TC.nii.gz`、`WT.nii.gz`、`combined_label.nii.gz`。
+- 已新增 3D 后处理模块 `postprocess_3d.py`，支持闭运算、开运算、空洞填充、连通域筛选、Z 轴平滑以及 `ET ⊆ TC ⊆ WT` 层级约束。
+- 已新增 `visualize_case.py`，可生成 Raw / Post 对比的 3D HTML 预览。
+
+### 8.1 Upper Bound 提示基线
+
+在 4 个固定验证病例上，使用真值紧致框作为 prompt 的 `upper_bound` 模式，并配合强后处理，得到：
+
+| 设置 | Mean Dice | Mean IoU | 说明 |
+| --- | --- | --- | --- |
+| `full_image_box` + 后处理 | 0.1807 | 0.1026 | 大量健康层假阳性 |
+| `upper_bound` + 后处理 | 0.6787 | 0.5370 | 证明模型本体具备可用上限 |
+
+这说明当前多任务 SAM-Med2D 的主要瓶颈并不完全在分割头，而在提示质量。
+
+### 8.2 YOLO 检测与端到端闭环
+
+仓库现已支持将 BraTS 原始病例切片转换为 YOLO 数据集，并训练检测器为 SAM 提供自动 bbox prompt。当前最优候选检测器为 `workdir_yolo/brats_yolo_dev_img320_v8m`：
+
+- `img320_v8m` 在 Dev 集上达到 `mAP50 = 0.8415`、`mAP50-95 = 0.6312`、`recall = 0.7778`
+- 阈值扫描表明 `conf = 0.05` 时 `slice_recall_any_box = 0.9367`，适合作为“宁可多给框，也尽量不漏层”的工作点
+
+基于该 YOLO 模型，`yolo_box -> SAM -> 3D postprocess` 的 4 病例端到端验证结果为：
+
+| 配置 | Raw Mean Dice | Post Mean Dice | Raw Mean IoU | Post Mean IoU |
+| --- | --- | --- | --- | --- |
+| `yolo_box` + 强后处理 | 0.5106 | 0.5431 | 0.3616 | 0.3984 |
+
+结论：项目已经取得实质性进展，当前具备“整病例自动提示分割 + 3D 后处理 + 3D 预览”的完整实验链路，可继续围绕 YOLO 工作点和困难病例召回率做下一轮优化。
+
+## 9. 注意事项
 
 - `train_singletask.py` 和 `train_multitask.py` 使用的数据格式不同，不能混用。
 - 多任务训练会自动把图像编码器输入层改成 4 通道，以适配 BraTS 四模态输入。
@@ -213,6 +247,6 @@ python -m compileall .
 
 再补一次小样本训练或评估命令。
 
-## 9. 许可证
+## 10. 许可证
 
 许可证见根目录 [LICENSE](LICENSE)。`segment_anything/` 相关实现保留原始项目的许可证说明。
