@@ -12,12 +12,14 @@ from brats_case import BraTSCase
 from infer_volume import (
     CLASS_NAMES,
     DEFAULT_YOLO_CHECKPOINT,
-    DEFAULT_YOLO_IMGSZ,
+    PROMPT_BOX_STRATEGIES,
     build_case_meta,
     build_combined_label,
     build_postprocess_config,
     build_prompt_provider,
+    build_yolo_prompt_config,
     run_volume_inference,
+    resolve_torch_device,
     save_case_meta,
     save_json,
     save_mask_outputs,
@@ -52,6 +54,16 @@ def parse_args():
     parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
     parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--yolo_iou", type=float, default=0.60)
+    parser.add_argument("--yolo_max_det", type=int, default=2)
+    parser.add_argument("--yolo_topk", type=int, default=2)
+    parser.add_argument("--prompt_box_strategy", default="top1", choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--prompt_box_strategy_et", default=None, choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--prompt_box_strategy_tc", default=None, choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--prompt_box_strategy_wt", default=None, choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--top2_score_ratio", type=float, default=0.5)
+    parser.add_argument("--top2_area_ratio_min", type=float, default=0.1)
+    parser.add_argument("--top2_area_ratio_max", type=float, default=2.0)
+    parser.add_argument("--top2_iou_max", type=float, default=0.9)
     parser.add_argument("--postprocess", type=str_to_bool, default=True)
     parser.add_argument("--closing_radius", type=int, default=1)
     parser.add_argument("--opening_radius", type=int, default=1)
@@ -242,12 +254,24 @@ def write_summary_markdown(output_path, summary):
     ]
 
     if config.get("prompt_mode") == "yolo_box":
+        top2_rules = config.get("yolo_top2_rules") or {}
+        box_strategy_by_class = config.get("prompt_box_strategy_by_class") or {}
         lines.extend([
             "### YOLO Prompt Config",
             "",
             f"- YOLO checkpoint: `{config['yolo_checkpoint']}`",
             f"- YOLO conf: `{config['yolo_conf']}`",
             f"- YOLO iou: `{config['yolo_iou']}`",
+            f"- YOLO max_det: `{config['yolo_max_det']}`",
+            f"- YOLO topk: `{config['yolo_topk']}`",
+            f"- Prompt box strategy: `{config['prompt_box_strategy']}`",
+            f"- Prompt box strategy ET: `{box_strategy_by_class.get('ET')}`",
+            f"- Prompt box strategy TC: `{box_strategy_by_class.get('TC')}`",
+            f"- Prompt box strategy WT: `{box_strategy_by_class.get('WT')}`",
+            f"- Top2 score ratio: `{top2_rules.get('score_ratio')}`",
+            f"- Top2 area ratio min: `{top2_rules.get('area_ratio_min')}`",
+            f"- Top2 area ratio max: `{top2_rules.get('area_ratio_max')}`",
+            f"- Top2 box IoU max: `{top2_rules.get('box_iou_max')}`",
             "",
         ])
 
@@ -359,6 +383,28 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
     raw_combined = build_combined_label(class_volumes)
     save_mask_outputs(brats_case, output_dir, class_volumes, raw_combined)
 
+    prompt_report_path = None
+    if hasattr(prompt_provider, "build_case_prompt_report"):
+        prompt_report = prompt_provider.build_case_prompt_report(brats_case)
+        prompt_report["config"] = build_yolo_prompt_config(
+            prompt_mode=args.prompt_mode,
+            yolo_checkpoint=args.yolo_checkpoint,
+            yolo_conf=args.yolo_conf,
+            yolo_iou=args.yolo_iou,
+            yolo_max_det=args.yolo_max_det,
+            yolo_topk=args.yolo_topk,
+            prompt_box_strategy=args.prompt_box_strategy,
+            prompt_box_strategy_et=args.prompt_box_strategy_et,
+            prompt_box_strategy_tc=args.prompt_box_strategy_tc,
+            prompt_box_strategy_wt=args.prompt_box_strategy_wt,
+            top2_score_ratio=args.top2_score_ratio,
+            top2_area_ratio_min=args.top2_area_ratio_min,
+            top2_area_ratio_max=args.top2_area_ratio_max,
+            top2_iou_max=args.top2_iou_max,
+        )
+        prompt_report_path = output_dir / "prompt_stats.json"
+        save_json(prompt_report_path, prompt_report)
+
     postprocess_config = build_postprocess_config(
         enabled=args.postprocess,
         closing_radius=args.closing_radius,
@@ -403,12 +449,23 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         threshold=args.threshold,
         postprocess_config=postprocess_config,
         postprocess_report_path=postprocess_report_path,
-        yolo_config={
-            "checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
-            "conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
-            "iou": float(args.yolo_iou) if args.prompt_mode == "yolo_box" else None,
-            "imgsz": DEFAULT_YOLO_IMGSZ if args.prompt_mode == "yolo_box" else None,
-        },
+        prompt_report_path=prompt_report_path,
+        yolo_config=build_yolo_prompt_config(
+            prompt_mode=args.prompt_mode,
+            yolo_checkpoint=args.yolo_checkpoint,
+            yolo_conf=args.yolo_conf,
+            yolo_iou=args.yolo_iou,
+            yolo_max_det=args.yolo_max_det,
+            yolo_topk=args.yolo_topk,
+            prompt_box_strategy=args.prompt_box_strategy,
+            prompt_box_strategy_et=args.prompt_box_strategy_et,
+            prompt_box_strategy_tc=args.prompt_box_strategy_tc,
+            prompt_box_strategy_wt=args.prompt_box_strategy_wt,
+            top2_score_ratio=args.top2_score_ratio,
+            top2_area_ratio_min=args.top2_area_ratio_min,
+            top2_area_ratio_max=args.top2_area_ratio_max,
+            top2_iou_max=args.top2_iou_max,
+        ),
     )
     save_case_meta(brats_case, output_dir, meta)
 
@@ -439,7 +496,7 @@ def main():
     case_dirs = select_case_dirs(args.cases_root, case_ids=args.case_ids, max_cases=args.max_cases)
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    device = torch.device(args.device)
+    device = resolve_torch_device(args.device)
 
     LOGGER.info("Loading model once for %d case(s).", len(case_dirs))
     model = load_multitask_model(
@@ -458,6 +515,16 @@ def main():
         yolo_checkpoint=args.yolo_checkpoint,
         yolo_conf=args.yolo_conf,
         yolo_iou=args.yolo_iou,
+        yolo_max_det=args.yolo_max_det,
+        yolo_topk=args.yolo_topk,
+        prompt_box_strategy=args.prompt_box_strategy,
+        prompt_box_strategy_et=args.prompt_box_strategy_et,
+        prompt_box_strategy_tc=args.prompt_box_strategy_tc,
+        prompt_box_strategy_wt=args.prompt_box_strategy_wt,
+        top2_score_ratio=args.top2_score_ratio,
+        top2_area_ratio_min=args.top2_area_ratio_min,
+        top2_area_ratio_max=args.top2_area_ratio_max,
+        top2_iou_max=args.top2_iou_max,
         device=args.device,
     )
 
@@ -494,6 +561,20 @@ def main():
             "yolo_checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
             "yolo_conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
             "yolo_iou": float(args.yolo_iou) if args.prompt_mode == "yolo_box" else None,
+            "yolo_max_det": int(args.yolo_max_det) if args.prompt_mode == "yolo_box" else None,
+            "yolo_topk": int(args.yolo_topk) if args.prompt_mode == "yolo_box" else None,
+            "prompt_box_strategy": str(args.prompt_box_strategy) if args.prompt_mode == "yolo_box" else None,
+            "prompt_box_strategy_by_class": {
+                "ET": str(args.prompt_box_strategy_et or args.prompt_box_strategy),
+                "TC": str(args.prompt_box_strategy_tc or args.prompt_box_strategy),
+                "WT": str(args.prompt_box_strategy_wt or args.prompt_box_strategy),
+            } if args.prompt_mode == "yolo_box" else None,
+            "yolo_top2_rules": {
+                "score_ratio": float(args.top2_score_ratio),
+                "area_ratio_min": float(args.top2_area_ratio_min),
+                "area_ratio_max": float(args.top2_area_ratio_max),
+                "box_iou_max": float(args.top2_iou_max),
+            } if args.prompt_mode == "yolo_box" else None,
             "postprocess": build_postprocess_config(
                 enabled=args.postprocess,
                 closing_radius=args.closing_radius,
