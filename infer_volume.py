@@ -67,10 +67,11 @@ def _configure_ultralytics_env(config_dir=".ultralytics"):
 
 
 class YoloBoxPromptProvider:
-    def __init__(self, image_size, yolo_checkpoint, yolo_conf, device):
+    def __init__(self, image_size, yolo_checkpoint, yolo_conf, yolo_iou, device):
         self.image_size = image_size
         self.yolo_checkpoint = Path(yolo_checkpoint).resolve()
         self.yolo_conf = float(yolo_conf)
+        self.yolo_iou = float(yolo_iou)
         self.device = self._normalize_device(device)
         self._slice_cache = {}
 
@@ -100,7 +101,7 @@ class YoloBoxPromptProvider:
         result = self.model.predict(
             source=pseudo_rgb,
             conf=self.yolo_conf,
-            iou=0.60,
+            iou=self.yolo_iou,
             imgsz=DEFAULT_YOLO_IMGSZ,
             device=self.device,
             max_det=1,
@@ -175,6 +176,7 @@ def parse_args():
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
     parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
     parser.add_argument("--yolo_conf", type=float, default=0.05)
+    parser.add_argument("--yolo_iou", type=float, default=0.60)
     parser.add_argument("--postprocess", type=str_to_bool, default=False)
     parser.add_argument("--closing_radius", type=int, default=1)
     parser.add_argument("--opening_radius", type=int, default=1)
@@ -185,13 +187,21 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_prompt_provider(prompt_mode, image_size, yolo_checkpoint=None, yolo_conf=0.05, device="cpu"):
+def build_prompt_provider(
+    prompt_mode,
+    image_size,
+    yolo_checkpoint=None,
+    yolo_conf=0.05,
+    yolo_iou=0.60,
+    device="cpu",
+):
     provider_class = PROMPT_PROVIDERS[prompt_mode]
     if prompt_mode == "yolo_box":
         return provider_class(
             image_size=image_size,
             yolo_checkpoint=yolo_checkpoint,
             yolo_conf=yolo_conf,
+            yolo_iou=yolo_iou,
             device=device,
         )
     return provider_class(image_size=image_size)
@@ -385,6 +395,7 @@ def main():
         args.image_size,
         yolo_checkpoint=args.yolo_checkpoint,
         yolo_conf=args.yolo_conf,
+        yolo_iou=args.yolo_iou,
         device=args.device,
     )
     model = load_multitask_model(
@@ -479,6 +490,7 @@ def main():
         yolo_config={
             "checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
             "conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
+            "iou": float(args.yolo_iou) if args.prompt_mode == "yolo_box" else None,
             "imgsz": DEFAULT_YOLO_IMGSZ if args.prompt_mode == "yolo_box" else None,
         },
     )

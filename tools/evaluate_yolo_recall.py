@@ -39,7 +39,12 @@ def parse_args():
         "--iou",
         type=float,
         default=0.60,
-        help="NMS IoU threshold used during prediction.",
+        help="Default NMS IoU threshold used during prediction when --iou_values is not set.",
+    )
+    parser.add_argument(
+        "--iou_values",
+        default="",
+        help="Optional comma-separated IoU thresholds to scan. Overrides --iou when provided.",
     )
     parser.add_argument(
         "--imgsz",
@@ -77,7 +82,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_conf_values(raw_value):
+def parse_float_values(raw_value, option_name):
     values = []
     for item in raw_value.split(","):
         item = item.strip()
@@ -85,8 +90,18 @@ def parse_conf_values(raw_value):
             continue
         values.append(float(item))
     if not values:
-        raise ValueError("No valid --conf_values were provided.")
+        raise ValueError(f"No valid {option_name} values were provided.")
     return values
+
+
+def parse_conf_values(raw_value):
+    return parse_float_values(raw_value, "--conf_values")
+
+
+def parse_iou_values(raw_value, fallback_iou):
+    if not raw_value.strip():
+        return [float(fallback_iou)]
+    return parse_float_values(raw_value, "--iou_values")
 
 
 def load_dataset_paths(data_arg, ultralytics_dir):
@@ -270,6 +285,7 @@ def write_scan_outputs(out_dir, payload):
     csv_path = out_dir / "scan_summary.csv"
     rows = payload["results"]
     fieldnames = [
+        "iou",
         "conf",
         "slice_recall_any_box",
         "slice_recall_iou_0.10",
@@ -292,7 +308,10 @@ def write_scan_outputs(out_dir, payload):
         for row in rows:
             writer.writerow({name: row.get(name) for name in fieldnames})
 
-    return json_path, csv_path
+    markdown_path = out_dir / "scan_summary.md"
+    markdown_path.write_text(build_scan_markdown(payload), encoding="utf-8")
+
+    return json_path, csv_path, markdown_path
 
 
 def choose_recommendation(results):
@@ -305,6 +324,8 @@ def choose_recommendation(results):
             item["slice_recall_any_box"],
             item["slice_recall_iou_0.30"],
             -item["background_false_positive_rate"],
+            -item["avg_boxes_per_positive_slice"],
+            -item["iou"],
             -item["conf"],
         ),
         reverse=True,
@@ -312,9 +333,105 @@ def choose_recommendation(results):
     return sorted_results[0]
 
 
+def choose_topk(results, top_k=5):
+    if top_k <= 0:
+        return []
+    sorted_results = sorted(
+        results,
+        key=lambda item: (
+            item["slice_recall_any_box"],
+            item["slice_recall_iou_0.30"],
+            -item["background_false_positive_rate"],
+            -item["avg_boxes_per_positive_slice"],
+            -item["iou"],
+            -item["conf"],
+        ),
+        reverse=True,
+    )
+    return sorted_results[:top_k]
+
+
+def _format_metric(value):
+    return f"{float(value):.4f}"
+
+
+def build_scan_markdown(payload):
+    recommendation = payload.get("recommended")
+    shortlist = payload.get("recommended_topk", [])
+    lines = [
+        "# YOLO Recall Scan Summary",
+        "",
+        "## Run Config",
+        "",
+        f"- Model: `{payload['model']}`",
+        f"- Dataset root: `{payload['dataset_root']}`",
+        f"- Split: `{payload['split']}`",
+        f"- Image size: `{payload['imgsz']}`",
+        f"- IoU values: `{', '.join(_format_metric(value) for value in payload['iou_values'])}`",
+        f"- Confidence values: `{', '.join(_format_metric(value) for value in payload['conf_values'])}`",
+        f"- Max detections: `{payload['max_det']}`",
+        f"- Batch: `{payload['batch']}`",
+        f"- Device: `{payload['device']}`",
+        "",
+    ]
+
+    if recommendation is not None:
+        lines.extend([
+            "## Recommended",
+            "",
+            f"- IoU: `{_format_metric(recommendation['iou'])}`",
+            f"- Conf: `{_format_metric(recommendation['conf'])}`",
+            f"- Slice recall any box: `{_format_metric(recommendation['slice_recall_any_box'])}`",
+            f"- Slice recall IoU@0.30: `{_format_metric(recommendation['slice_recall_iou_0.30'])}`",
+            f"- Background false positive rate: `{_format_metric(recommendation['background_false_positive_rate'])}`",
+            "",
+        ])
+
+    if shortlist:
+        lines.extend([
+            "## Top Candidates",
+            "",
+            "| Rank | IoU | Conf | Recall Any | Recall IoU@0.30 | BG FP Rate | Avg Boxes/Positive |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for index, item in enumerate(shortlist, start=1):
+            lines.append(
+                f"| {index} | "
+                f"{_format_metric(item['iou'])} | "
+                f"{_format_metric(item['conf'])} | "
+                f"{_format_metric(item['slice_recall_any_box'])} | "
+                f"{_format_metric(item['slice_recall_iou_0.30'])} | "
+                f"{_format_metric(item['background_false_positive_rate'])} | "
+                f"{_format_metric(item['avg_boxes_per_positive_slice'])} |"
+            )
+        lines.append("")
+
+    lines.extend([
+        "## Full Grid",
+        "",
+        "| IoU | Conf | Recall Any | Recall IoU@0.10 | Recall IoU@0.30 | Recall IoU@0.50 | BG FP Rate | Avg Boxes/Positive | Avg Boxes/Negative |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for item in payload["results"]:
+        lines.append(
+            f"| {_format_metric(item['iou'])} | "
+            f"{_format_metric(item['conf'])} | "
+            f"{_format_metric(item['slice_recall_any_box'])} | "
+            f"{_format_metric(item['slice_recall_iou_0.10'])} | "
+            f"{_format_metric(item['slice_recall_iou_0.30'])} | "
+            f"{_format_metric(item['slice_recall_iou_0.50'])} | "
+            f"{_format_metric(item['background_false_positive_rate'])} | "
+            f"{_format_metric(item['avg_boxes_per_positive_slice'])} | "
+            f"{_format_metric(item['avg_boxes_per_negative_slice'])} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main():
     args = parse_args()
     conf_values = parse_conf_values(args.conf_values)
+    iou_values = parse_iou_values(args.iou_values, args.iou)
     ultralytics_dir = configure_ultralytics_env(args.ultralytics_dir)
     dataset_info = load_dataset_paths(args.data, ultralytics_dir)
     image_dir, label_dir = resolve_split_dirs(dataset_info["dataset_root"], args.split)
@@ -328,22 +445,25 @@ def main():
     model = YOLO(str(Path(args.model).resolve()))
 
     results = []
-    for conf in conf_values:
-        predictions = run_predict(
-            model=model,
-            image_dir=image_dir,
-            conf=conf,
-            iou=args.iou,
-            imgsz=args.imgsz,
-            device=args.device,
-            max_det=args.max_det,
-            batch=args.batch,
-        )
-        metrics = evaluate_predictions(predictions, gt_by_stem, image_stems)
-        metrics["conf"] = float(conf)
-        results.append(metrics)
+    for iou in iou_values:
+        for conf in conf_values:
+            predictions = run_predict(
+                model=model,
+                image_dir=image_dir,
+                conf=conf,
+                iou=iou,
+                imgsz=args.imgsz,
+                device=args.device,
+                max_det=args.max_det,
+                batch=args.batch,
+            )
+            metrics = evaluate_predictions(predictions, gt_by_stem, image_stems)
+            metrics["iou"] = float(iou)
+            metrics["conf"] = float(conf)
+            results.append(metrics)
 
     recommendation = choose_recommendation(results)
+    recommended_topk = choose_topk(results)
 
     model_name = Path(args.model).stem
     out_dir = Path(args.out_dir) / f"{model_name}_{args.split}"
@@ -354,20 +474,24 @@ def main():
         "dataset_root": str(dataset_info["dataset_root"]),
         "split": args.split,
         "imgsz": int(args.imgsz),
-        "iou": float(args.iou),
+        "iou_values": [float(value) for value in iou_values],
+        "conf_values": [float(value) for value in conf_values],
         "max_det": int(args.max_det),
         "batch": int(args.batch),
         "device": args.device,
         "results": results,
         "recommended": recommendation,
+        "recommended_topk": recommended_topk,
     }
-    json_path, csv_path = write_scan_outputs(out_dir, payload)
+    json_path, csv_path, markdown_path = write_scan_outputs(out_dir, payload)
 
     print(json.dumps({
         "out_dir": str(out_dir.resolve()),
         "json": str(json_path.resolve()),
         "csv": str(csv_path.resolve()),
+        "markdown": str(markdown_path.resolve()),
         "recommended": recommendation,
+        "recommended_topk": recommended_topk,
     }, indent=2))
 
 
