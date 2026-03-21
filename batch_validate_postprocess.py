@@ -64,6 +64,19 @@ def parse_args():
     parser.add_argument("--top2_area_ratio_min", type=float, default=0.1)
     parser.add_argument("--top2_area_ratio_max", type=float, default=2.0)
     parser.add_argument("--top2_iou_max", type=float, default=0.9)
+    parser.add_argument("--z_prompt_mode", default="none", choices=["none", "smooth", "interpolate"])
+    parser.add_argument("--z_smooth_window", type=int, default=1)
+    parser.add_argument("--z_fill_gap_max", type=int, default=1)
+    parser.add_argument("--z_center_shift_max", type=float, default=64.0)
+    parser.add_argument("--z_area_ratio_min", type=float, default=0.25)
+    parser.add_argument("--z_area_ratio_max", type=float, default=4.0)
+    parser.add_argument("--wt_continuity_enabled", type=str_to_bool, default=False)
+    parser.add_argument("--wt_continuity_score_thresh", type=float, default=0.15)
+    parser.add_argument("--wt_continuity_center_shift_max", type=float, default=48.0)
+    parser.add_argument("--wt_continuity_area_ratio_min", type=float, default=0.5)
+    parser.add_argument("--wt_continuity_area_ratio_max", type=float, default=2.0)
+    parser.add_argument("--wt_continuity_mask_dilate_iters", type=int, default=1)
+    parser.add_argument("--wt_continuity_mask_blur_kernel", type=int, default=3)
     parser.add_argument("--postprocess", type=str_to_bool, default=True)
     parser.add_argument("--closing_radius", type=int, default=1)
     parser.add_argument("--opening_radius", type=int, default=1)
@@ -177,6 +190,34 @@ def summarize_results(results):
     return summary
 
 
+def summarize_wt_continuity(results):
+    summary = {
+        "enabled": False,
+        "num_cases_with_stats": 0,
+        "eligible_total": 0,
+        "trigger_total": 0,
+        "trigger_reasons": {},
+        "rescue": 0,
+        "neutral": 0,
+        "harm": 0,
+    }
+    for item in results:
+        wt_continuity = item.get("wt_continuity")
+        if not wt_continuity:
+            continue
+        case_summary = wt_continuity.get("summary") or {}
+        summary["num_cases_with_stats"] += 1
+        summary["enabled"] = summary["enabled"] or bool(case_summary.get("enabled"))
+        summary["eligible_total"] += int(case_summary.get("eligible_total", 0))
+        summary["trigger_total"] += int(case_summary.get("trigger_total", 0))
+        summary["rescue"] += int(case_summary.get("rescue", 0))
+        summary["neutral"] += int(case_summary.get("neutral", 0))
+        summary["harm"] += int(case_summary.get("harm", 0))
+        for reason, count in (case_summary.get("trigger_reasons") or {}).items():
+            summary["trigger_reasons"][str(reason)] = summary["trigger_reasons"].get(str(reason), 0) + int(count)
+    return summary
+
+
 def build_summary_row(case_result):
     row = {
         "case_id": case_result["case_id"],
@@ -232,6 +273,7 @@ def write_summary_markdown(output_path, summary):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     aggregate = summary.get("aggregate", {})
+    aggregate_wt_continuity = summary.get("aggregate_wt_continuity", {})
     config = summary.get("config", {})
     cases = summary.get("cases", [])
     failures = summary.get("failures", [])
@@ -256,6 +298,8 @@ def write_summary_markdown(output_path, summary):
     if config.get("prompt_mode") == "yolo_box":
         top2_rules = config.get("yolo_top2_rules") or {}
         box_strategy_by_class = config.get("prompt_box_strategy_by_class") or {}
+        z_prompt = config.get("yolo_z_prompt") or {}
+        wt_continuity = config.get("yolo_wt_continuity") or {}
         lines.extend([
             "### YOLO Prompt Config",
             "",
@@ -272,6 +316,19 @@ def write_summary_markdown(output_path, summary):
             f"- Top2 area ratio min: `{top2_rules.get('area_ratio_min')}`",
             f"- Top2 area ratio max: `{top2_rules.get('area_ratio_max')}`",
             f"- Top2 box IoU max: `{top2_rules.get('box_iou_max')}`",
+            f"- Z prompt mode: `{z_prompt.get('mode')}`",
+            f"- Z smooth window: `{z_prompt.get('smooth_window')}`",
+            f"- Z fill gap max: `{z_prompt.get('fill_gap_max')}`",
+            f"- Z center shift max: `{z_prompt.get('center_shift_max')}`",
+            f"- Z area ratio min: `{z_prompt.get('area_ratio_min')}`",
+            f"- Z area ratio max: `{z_prompt.get('area_ratio_max')}`",
+            f"- WT continuity enabled: `{wt_continuity.get('enabled')}`",
+            f"- WT continuity score thresh: `{wt_continuity.get('score_thresh')}`",
+            f"- WT continuity center shift max: `{wt_continuity.get('center_shift_max')}`",
+            f"- WT continuity area ratio min: `{wt_continuity.get('area_ratio_min')}`",
+            f"- WT continuity area ratio max: `{wt_continuity.get('area_ratio_max')}`",
+            f"- WT continuity mask dilate iters: `{wt_continuity.get('mask_dilate_iters')}`",
+            f"- WT continuity mask blur kernel: `{wt_continuity.get('mask_blur_kernel')}`",
             "",
         ])
 
@@ -300,6 +357,22 @@ def write_summary_markdown(output_path, summary):
                 f"{_format_metric(aggregate['post']['per_class'][class_name]['iou'])} | "
                 f"{_format_metric(aggregate['delta']['per_class'][class_name]['iou'])} |"
             )
+        if aggregate_wt_continuity.get("num_cases_with_stats", 0) > 0:
+            lines.extend([
+                "",
+                "### WT Continuity Aggregate",
+                "",
+                "| Eligible | Trigger | Rescue | Neutral | Harm | Trigger Reasons |",
+                "| ---: | ---: | ---: | ---: | ---: | --- |",
+                (
+                    f"| {aggregate_wt_continuity.get('eligible_total', 0)} | "
+                    f"{aggregate_wt_continuity.get('trigger_total', 0)} | "
+                    f"{aggregate_wt_continuity.get('rescue', 0)} | "
+                    f"{aggregate_wt_continuity.get('neutral', 0)} | "
+                    f"{aggregate_wt_continuity.get('harm', 0)} | "
+                    f"`{json.dumps(aggregate_wt_continuity.get('trigger_reasons', {}), ensure_ascii=False)}` |"
+                ),
+            ])
     else:
         lines.extend([
             "## Aggregate",
@@ -351,6 +424,22 @@ def write_summary_markdown(output_path, summary):
         html_rel = _relative_path(case_result["html_path"], output_root).replace("\\", "/")
         lines.append("")
         lines.append(f"- 3D Preview: [{html_rel}]({html_rel})")
+        wt_continuity = case_result.get("wt_continuity")
+        if wt_continuity:
+            wt_summary = wt_continuity.get("summary") or {}
+            lines.extend([
+                "",
+                "| WT Continuity Eligible | Trigger | Rescue | Neutral | Harm | Trigger Reasons |",
+                "| ---: | ---: | ---: | ---: | ---: | --- |",
+                (
+                    f"| {wt_summary.get('eligible_total', 0)} | "
+                    f"{wt_summary.get('trigger_total', 0)} | "
+                    f"{wt_summary.get('rescue', 0)} | "
+                    f"{wt_summary.get('neutral', 0)} | "
+                    f"{wt_summary.get('harm', 0)} | "
+                    f"`{json.dumps(wt_summary.get('trigger_reasons', {}), ensure_ascii=False)}` |"
+                ),
+            ])
 
     if failures:
         lines.extend([
@@ -383,27 +472,8 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
     raw_combined = build_combined_label(class_volumes)
     save_mask_outputs(brats_case, output_dir, class_volumes, raw_combined)
 
+    prompt_report = None
     prompt_report_path = None
-    if hasattr(prompt_provider, "build_case_prompt_report"):
-        prompt_report = prompt_provider.build_case_prompt_report(brats_case)
-        prompt_report["config"] = build_yolo_prompt_config(
-            prompt_mode=args.prompt_mode,
-            yolo_checkpoint=args.yolo_checkpoint,
-            yolo_conf=args.yolo_conf,
-            yolo_iou=args.yolo_iou,
-            yolo_max_det=args.yolo_max_det,
-            yolo_topk=args.yolo_topk,
-            prompt_box_strategy=args.prompt_box_strategy,
-            prompt_box_strategy_et=args.prompt_box_strategy_et,
-            prompt_box_strategy_tc=args.prompt_box_strategy_tc,
-            prompt_box_strategy_wt=args.prompt_box_strategy_wt,
-            top2_score_ratio=args.top2_score_ratio,
-            top2_area_ratio_min=args.top2_area_ratio_min,
-            top2_area_ratio_max=args.top2_area_ratio_max,
-            top2_iou_max=args.top2_iou_max,
-        )
-        prompt_report_path = output_dir / "prompt_stats.json"
-        save_json(prompt_report_path, prompt_report)
 
     postprocess_config = build_postprocess_config(
         enabled=args.postprocess,
@@ -438,6 +508,95 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         postprocess_report_path = output_dir / "postprocess_report.json"
         save_json(postprocess_report_path, postprocess_report)
 
+    initial_meta = build_case_meta(
+        brats_case=brats_case,
+        output_dir=output_dir,
+        prompt_mode=args.prompt_mode,
+        finetune_method=args.finetune_method,
+        sam_checkpoint=args.sam_checkpoint,
+        finetuned_checkpoint=args.finetuned_checkpoint,
+        image_size=args.image_size,
+        threshold=args.threshold,
+        postprocess_config=postprocess_config,
+        postprocess_report_path=postprocess_report_path,
+        prompt_report_path=prompt_report_path,
+        yolo_config=build_yolo_prompt_config(
+            prompt_mode=args.prompt_mode,
+            yolo_checkpoint=args.yolo_checkpoint,
+            yolo_conf=args.yolo_conf,
+            yolo_iou=args.yolo_iou,
+            yolo_max_det=args.yolo_max_det,
+            yolo_topk=args.yolo_topk,
+            prompt_box_strategy=args.prompt_box_strategy,
+            prompt_box_strategy_et=args.prompt_box_strategy_et,
+            prompt_box_strategy_tc=args.prompt_box_strategy_tc,
+            prompt_box_strategy_wt=args.prompt_box_strategy_wt,
+            top2_score_ratio=args.top2_score_ratio,
+            top2_area_ratio_min=args.top2_area_ratio_min,
+            top2_area_ratio_max=args.top2_area_ratio_max,
+            top2_iou_max=args.top2_iou_max,
+            z_prompt_mode=args.z_prompt_mode,
+            z_smooth_window=args.z_smooth_window,
+            z_fill_gap_max=args.z_fill_gap_max,
+            z_center_shift_max=args.z_center_shift_max,
+            z_area_ratio_min=args.z_area_ratio_min,
+            z_area_ratio_max=args.z_area_ratio_max,
+            wt_continuity_enabled=args.wt_continuity_enabled,
+            wt_continuity_score_thresh=args.wt_continuity_score_thresh,
+            wt_continuity_center_shift_max=args.wt_continuity_center_shift_max,
+            wt_continuity_area_ratio_min=args.wt_continuity_area_ratio_min,
+            wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
+            wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
+            wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+        ),
+    )
+    save_case_meta(brats_case, output_dir, initial_meta)
+
+    html_path, _ = render_case(
+        output_dir=output_dir,
+        mask_name=args.html_mask_name,
+        save_path=None,
+        show=False,
+        opacity=args.html_opacity,
+    )
+
+    gt_masks = load_ground_truth_masks(case_dir)
+    raw_metrics = evaluate_case_metrics(class_volumes, gt_masks)
+    post_metrics = evaluate_case_metrics(postprocessed_volumes, gt_masks)
+    if hasattr(prompt_provider, "build_case_prompt_report"):
+        prompt_report = prompt_provider.build_case_prompt_report(brats_case, gt_masks=gt_masks)
+        prompt_report["config"] = build_yolo_prompt_config(
+            prompt_mode=args.prompt_mode,
+            yolo_checkpoint=args.yolo_checkpoint,
+            yolo_conf=args.yolo_conf,
+            yolo_iou=args.yolo_iou,
+            yolo_max_det=args.yolo_max_det,
+            yolo_topk=args.yolo_topk,
+            prompt_box_strategy=args.prompt_box_strategy,
+            prompt_box_strategy_et=args.prompt_box_strategy_et,
+            prompt_box_strategy_tc=args.prompt_box_strategy_tc,
+            prompt_box_strategy_wt=args.prompt_box_strategy_wt,
+            top2_score_ratio=args.top2_score_ratio,
+            top2_area_ratio_min=args.top2_area_ratio_min,
+            top2_area_ratio_max=args.top2_area_ratio_max,
+            top2_iou_max=args.top2_iou_max,
+            z_prompt_mode=args.z_prompt_mode,
+            z_smooth_window=args.z_smooth_window,
+            z_fill_gap_max=args.z_fill_gap_max,
+            z_center_shift_max=args.z_center_shift_max,
+            z_area_ratio_min=args.z_area_ratio_min,
+            z_area_ratio_max=args.z_area_ratio_max,
+            wt_continuity_enabled=args.wt_continuity_enabled,
+            wt_continuity_score_thresh=args.wt_continuity_score_thresh,
+            wt_continuity_center_shift_max=args.wt_continuity_center_shift_max,
+            wt_continuity_area_ratio_min=args.wt_continuity_area_ratio_min,
+            wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
+            wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
+            wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+        )
+        prompt_report_path = output_dir / "prompt_stats.json"
+        save_json(prompt_report_path, prompt_report)
+
     meta = build_case_meta(
         brats_case=brats_case,
         output_dir=output_dir,
@@ -465,27 +624,30 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             top2_area_ratio_min=args.top2_area_ratio_min,
             top2_area_ratio_max=args.top2_area_ratio_max,
             top2_iou_max=args.top2_iou_max,
+            z_prompt_mode=args.z_prompt_mode,
+            z_smooth_window=args.z_smooth_window,
+            z_fill_gap_max=args.z_fill_gap_max,
+            z_center_shift_max=args.z_center_shift_max,
+            z_area_ratio_min=args.z_area_ratio_min,
+            z_area_ratio_max=args.z_area_ratio_max,
+            wt_continuity_enabled=args.wt_continuity_enabled,
+            wt_continuity_score_thresh=args.wt_continuity_score_thresh,
+            wt_continuity_center_shift_max=args.wt_continuity_center_shift_max,
+            wt_continuity_area_ratio_min=args.wt_continuity_area_ratio_min,
+            wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
+            wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
+            wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
         ),
     )
     save_case_meta(brats_case, output_dir, meta)
-
-    html_path, _ = render_case(
-        output_dir=output_dir,
-        mask_name=args.html_mask_name,
-        save_path=None,
-        show=False,
-        opacity=args.html_opacity,
-    )
-
-    gt_masks = load_ground_truth_masks(case_dir)
-    raw_metrics = evaluate_case_metrics(class_volumes, gt_masks)
-    post_metrics = evaluate_case_metrics(postprocessed_volumes, gt_masks)
     return {
         "case_id": brats_case.case_id,
         "output_dir": str(output_dir.resolve()),
         "html_path": str(Path(html_path).resolve()),
         "raw": raw_metrics,
         "post": post_metrics,
+        "prompt_report_path": str(prompt_report_path.resolve()) if prompt_report_path else None,
+        "wt_continuity": None if prompt_report is None else prompt_report.get("wt_continuity"),
     }
 
 
@@ -525,6 +687,19 @@ def main():
         top2_area_ratio_min=args.top2_area_ratio_min,
         top2_area_ratio_max=args.top2_area_ratio_max,
         top2_iou_max=args.top2_iou_max,
+        z_prompt_mode=args.z_prompt_mode,
+        z_smooth_window=args.z_smooth_window,
+        z_fill_gap_max=args.z_fill_gap_max,
+        z_center_shift_max=args.z_center_shift_max,
+        z_area_ratio_min=args.z_area_ratio_min,
+        z_area_ratio_max=args.z_area_ratio_max,
+        wt_continuity_enabled=args.wt_continuity_enabled,
+        wt_continuity_score_thresh=args.wt_continuity_score_thresh,
+        wt_continuity_center_shift_max=args.wt_continuity_center_shift_max,
+        wt_continuity_area_ratio_min=args.wt_continuity_area_ratio_min,
+        wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
+        wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
+        wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
         device=args.device,
     )
 
@@ -575,6 +750,23 @@ def main():
                 "area_ratio_max": float(args.top2_area_ratio_max),
                 "box_iou_max": float(args.top2_iou_max),
             } if args.prompt_mode == "yolo_box" else None,
+            "yolo_z_prompt": {
+                "mode": str(args.z_prompt_mode),
+                "smooth_window": int(args.z_smooth_window),
+                "fill_gap_max": int(args.z_fill_gap_max),
+                "center_shift_max": float(args.z_center_shift_max),
+                "area_ratio_min": float(args.z_area_ratio_min),
+                "area_ratio_max": float(args.z_area_ratio_max),
+            } if args.prompt_mode == "yolo_box" else None,
+            "yolo_wt_continuity": {
+                "enabled": bool(args.wt_continuity_enabled),
+                "score_thresh": float(args.wt_continuity_score_thresh),
+                "center_shift_max": float(args.wt_continuity_center_shift_max),
+                "area_ratio_min": float(args.wt_continuity_area_ratio_min),
+                "area_ratio_max": float(args.wt_continuity_area_ratio_max),
+                "mask_dilate_iters": int(args.wt_continuity_mask_dilate_iters),
+                "mask_blur_kernel": int(args.wt_continuity_mask_blur_kernel),
+            } if args.prompt_mode == "yolo_box" else None,
             "postprocess": build_postprocess_config(
                 enabled=args.postprocess,
                 closing_radius=args.closing_radius,
@@ -587,6 +779,7 @@ def main():
             "html_mask_name": args.html_mask_name,
         },
         "aggregate": summarize_results(results),
+        "aggregate_wt_continuity": summarize_wt_continuity(results),
         "cases": results,
         "failures": failures,
     }
