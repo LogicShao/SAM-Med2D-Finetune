@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+web_demo/**/__pycache__/
+web_demo/**/*.pyc
+web_demo/static/generated/
+outputs/web_demo_runs/
 
 # C extensions
 *.so

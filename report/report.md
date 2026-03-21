@@ -24,7 +24,7 @@
 
 - 已将系统推进为整病例自动分割闭环，而非仅切片级实验；
 - 已建立固定病例集的正式回归流程，能够对不同 prompt 策略进行可重复对比；
-- 已完成 `WT-only continuity` PoC 以及 `WT gate` 收敛实验，形成默认展示配置建议。
+- 已完成 `WT-only continuity` PoC 以及 `WT gate` 收敛实验，形成“baseline 默认主配置 + g4 机制验证对照”的冻结建议。
 
 因此，项目当前状态与申报目标的衔接关系可以概括为：算法主线和展示主线已经具备原型基础，结项阶段更适合以“展示优先、复用现有结果、适度保留在线推理”为策略，完成科技实物形式的整合与说明。
 
@@ -136,7 +136,7 @@
 
 在 `WT-only continuity` 的基础上，进一步做了 `WT gate` 参数收敛，目标是降低误触发与 `harm`，同时保持 overall 与 WT 的正收益。
 
-现有结果中，`g4` 更适合作为默认展示配置：
+现有结果中，`g4` 更适合作为 `WT-only continuity` 的机制验证对照配置：
 
 - `fixed20 post Mean Dice = 0.528580`，较 baseline `+0.004531`
 - `fixed20 WT post Dice = 0.697473`，较 baseline `+0.013594`
@@ -158,6 +158,7 @@
 1. 主要收益来自 `WT missing_box` 补救；
 2. 应优先收紧 `low_score / center_jump / area_jump` 误触发；
 3. 不建议再回到 `ET/TC continuity` 或大规模全局扫参。
+4. `g4` 可以保留为展示机制的对照配置，但不能取代 baseline 成为结项默认主配置。
 
 ### 8. confirm_large_unseen 大样本确认结论
 
@@ -227,48 +228,56 @@
 
 但其误触发与 `harm` 明显更多，因此更适合作为研究参考组，而不是默认展示组。
 
-## 结项展示版 Web 系统方案
+## 结项展示版 Web demo 技术路线
 
-结项展示版 Web 系统建议采用“展示优先、复用现有结果、在线推理可选”的策略，不建议在结项阶段重写算法主线。
+结项展示版 Web demo 建议采用“展示优先、只读复用现有结果、默认口径前置”的策略，不在结项阶段重写算法主线，也不再扩展新实验。
 
-### 1. 展示优先目标
+### 1. 技术栈选择
 
-优先实现以下能力：
+建议采用 `FastAPI + Gradio` 的轻量组合：
 
-1. 样例病例回放  
-可直接选择固定样例病例，查看原始结果、后处理结果、三维预览与关键指标。
+- `FastAPI` 负责结果文件索引、静态 HTML 预览文件挂载和统一启动入口；
+- `Gradio` 负责快速搭建病例选择、指标查看、2D 切片展示和讲解页签；
+- 页面只读复用已有 `outputs`，不增加数据库、登录、任务队列等重组件。
 
-2. 结果查看  
-可查看 `summary.md`、`summary_metrics.json`、病例级指标、关键配置与 HTML 三维预览。
+### 2. 数据复用原则
 
-3. 实验对比  
-可对比 baseline、`smooth`、`interpolate`、`WT-only continuity g0`、`WT gate g4` 等代表性方案。
+展示版 Web demo 应尽量复用仓库现有产物，不重写算法主线：
 
-### 2. 在线推理定位
+- 直接读取 `summary.md`、`summary_metrics.json`、`prompt_stats.json`；
+- 直接嵌入现有 `preview_3d_compare_all.html`；
+- 直接读取病例目录中的 `case_meta.json` 与 `post_combined_label.nii.gz`；
+- 2D 切片图仅作为展示层生成，不改变任何预测结果文件。
 
-在线推理建议作为可选功能，而非结项展示主线。原因是：
+### 3. 页面组织
+
+页面至少包含以下三部分：
+
+1. 首页  
+展示项目简介、技术路线、当前冻结结论，并明确写出：baseline 是默认主配置，g4 只是机制验证对照组。
+
+2. 病例选择页  
+支持选择 `fixed20`、`hard8`、`confirm_large_unseen` 中的样例病例，并给出典型病例分组说明。
+
+3. 结果展示页  
+展示病例基本信息、baseline 指标、baseline vs g4 对比、2D 切片叠加图、3D HTML 预览以及关键结论文案。
+
+### 4. 展示口径约束
+
+结项展示阶段必须内置以下口径：
+
+- baseline 作为默认展示配置；
+- g4 用于展示 `WT missing_box` 补救机制与 fixed20 上的正信号；
+- confirm_large_unseen 167 例不支持将 g4 表述为更优默认配置；
+- 典型病例应覆盖 baseline 稳定样例、fixed20 上的 WT-only 正信号样例，以及 confirm_large_unseen 上的 g4 回退样例。
+
+### 5. 在线推理定位
+
+在线推理不应作为本轮结项 demo 的主线能力。原因是：
 
 - 现有项目价值已经足以通过固定样例与正式回归结果展示；
-- 在线推理需要额外考虑 GPU 环境、任务排队、文件上传与耗时反馈；
-- 结项阶段更应优先保证展示稳定性与材料完整性。
-
-### 3. 实现原则
-
-展示版 Web 系统应尽量复用仓库现有产物，不重写算法主线：
-
-- 直接复用 `outputs` 目录中的 `summary.md`、`summary_metrics.json`、`prompt_stats.json`；
-- 直接复用现有 `preview_3d_compare_all.html`；
-- 后端仅做文件索引、结果查询与静态页面组织；
-- 数据库可只存病例元信息、结果索引和说明文本，避免在结项阶段引入不必要复杂度。
-
-### 4. 建议展示内容
-
-建议选取以下内容作为展示主线：
-
-- baseline 与 `WT gate g4` 的 fixed20 汇总对比；
-- 2 到 3 个典型病例的三维预览；
-- 1 个 hard case 的 `WT missing_box` 补救前后示意；
-- 系统闭环流程图与默认配置说明。
+- 在线推理会额外引入 GPU 环境、文件上传、耗时反馈和容错问题；
+- 结项阶段更应优先保证展示稳定性、可截图性和可讲解性。
 
 ## 当前不足与下一步
 
@@ -312,7 +321,7 @@
 - baseline 已固定；
 - 全类 `smooth / interpolate` 无稳定收益；
 - `WT-only continuity` 已成立；
-- `WT gate g4` 适合作为默认展示配置；
+- `g4` 仅作为 `WT-only continuity` 的机制验证对照配置；
 - 当前主要收益来自 `WT missing_box` 补救。
 
 5. 待补材料
