@@ -159,11 +159,41 @@
 2. 应优先收紧 `low_score / center_jump / area_jump` 误触发；
 3. 不建议再回到 `ET/TC continuity` 或大规模全局扫参。
 
+### 8. confirm_large_unseen 大样本确认结论
+
+在固定 20 例之外，项目又补做了 `confirm_large_unseen` 大样本确认实验。该集合包含 167 例病例，来源于当前验证集全部 187 例中排除 `fixed20` 与 `hard8` 后得到的更大未参与调参样本。
+
+本轮只比较 baseline 与 `g4`，不再调参、不改模型、不改代码逻辑。结果如下：
+
+- baseline：`post Mean Dice = 0.536181`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.620401`
+- `g4`：`post Mean Dice = 0.535515`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.618403`
+- 相对 baseline，`g4` 的 overall 变化为 `-0.000666`，`WT` 变化为 `-0.001998`
+- case-level 统计为 `win / tie / loss = 86 / 13 / 68`
+- mean delta 为 `-0.000666`，bootstrap 95% CI 为 `[-0.005824, 0.004504]`
+
+这一结果说明：`g4` 在 fixed20 上的收益结论并没有在更大未见样本上稳定复现。虽然 `ET/TC` 仍保持不退化，但 `WT` 与 overall 均出现轻微回退，因此当前不能再将 `g4` 表述为“更大样本默认最优配置”。
+
+结合 fixed20 与 `confirm_large_unseen` 两轮证据，可以冻结的判断是：
+
+1. `WT-only continuity` 作为机制方向是成立的；
+2. `g4` 可作为 `WT missing_box` 补救机制的展示配置；
+3. 若以更大未参与调参样本作为结项主证据，baseline 仍是更稳妥的默认主对照。
+
 ## 推荐默认配置
 
-当前建议冻结两套配置：一套作为默认展示配置，一套作为高收益参考组。
+结合 fixed20 与 `confirm_large_unseen` 的现有结果，当前更适合冻结三套角色清晰的配置：baseline 作为正式主对照与稳妥默认，`g4` 作为 `WT-only continuity` 展示参考组，`g0` 作为高收益研究参考组。
 
-### 1. 默认展示配置
+### 1. 正式主对照与稳妥默认配置
+
+- detector: `conf=0.05, iou=0.60`
+- prompt policy: `top1`
+- `z_prompt_mode: none`
+- `WT continuity: disabled`
+- 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
+
+这套配置对应当前正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此更适合作为结项阶段的主对照与稳妥默认。
+
+### 2. WT-only continuity 展示参考配置
 
 - detector: `conf=0.05, iou=0.60`
 - prompt policy: `top1`
@@ -177,9 +207,9 @@
 - `WT gate mask_blur_kernel = 3`
 - 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
 
-这套配置对应 `g4`，更适合作为结项展示版默认配置，原因是稳定、误触发更少、且相对 baseline 仍保持正收益。
+这套配置对应 `g4`。它在 fixed20 上表现为更稳健的 `WT gate` 收敛组，适合用于展示 `WT-only continuity` 机制本身；但在 `confirm_large_unseen` 上未能继续优于 baseline，因此更适合作为“机制展示参考组”，而不是结项阶段唯一默认配置。
 
-### 2. 高收益参考组
+### 3. 高收益参考组
 
 保留 `g0` 作为高收益参考组：
 
@@ -258,7 +288,7 @@
 
 下一步建议如下：
 
-1. 以 `g4` 为默认展示配置，完成结项展示版 Web 原型封装。
+1. 以 baseline 作为结项主对照配置，按需展示 `g4` 作为 `WT-only continuity` 的机制样例。
 2. 保留 `g0` 作为研究参考组，用于说明“高收益但误触发更多”的技术权衡。
 3. 若仍有少量实验空间，优先分析 `WT missing_box` 长段传播导致的 `harm` 病例，不建议再回到全类 continuity 或大规模扫参。
 4. 将当前结果整理为图文并茂的结项材料，而不是继续扩展新的算法分支。
