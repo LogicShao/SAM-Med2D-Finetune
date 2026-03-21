@@ -13,6 +13,16 @@
   --danger: #9f2d2d;
   --shadow: 0 18px 40px rgba(41, 36, 30, 0.08);
   --radius: 20px;
+  --page-width: 1180px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --card-padding: 24px;
+  --card-padding-sm: 16px;
 }
 
 * {
@@ -47,7 +57,7 @@ a {
 .topbar-inner,
 .page-shell,
 .footer {
-  width: min(1180px, calc(100% - 32px));
+  width: min(var(--page-width), calc(100% - 40px));
   margin: 0 auto;
 }
 
@@ -55,13 +65,12 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: var(--space-24);
   padding: 18px 0;
 }
 
 .brand-block {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 4px;
 }
 
@@ -80,7 +89,8 @@ a {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-12);
+  flex-wrap: wrap;
 }
 
 .nav-link {
@@ -98,7 +108,16 @@ a {
 }
 
 .page-shell {
-  padding: 34px 0 56px;
+  padding: var(--space-32) 0 56px;
+}
+
+.page-container {
+  display: grid;
+  gap: var(--space-32);
+}
+
+.page-container > * {
+  min-width: 0;
 }
 
 .footer {
@@ -116,9 +135,15 @@ a {
   box-shadow: var(--shadow);
 }
 
+.card {
+  display: grid;
+  gap: var(--space-24);
+  padding: var(--card-padding);
+}
+
 .hero {
-  padding: 34px;
-  margin-bottom: 22px;
+  gap: var(--space-24);
+  padding: 32px;
   background:
     linear-gradient(135deg, rgba(31, 111, 95, 0.08), transparent 36%),
     linear-gradient(180deg, var(--paper) 0%, #fff8ef 100%);
@@ -126,8 +151,13 @@ a {
 
 .hero h1,
 .section-heading h1,
-.card h2 {
-  margin: 0 0 10px;
+.card h2,
+.case-card h3,
+.status-card h3,
+.empty-state h2,
+.empty-state h3 {
+  margin: 0;
+  line-height: 1.25;
 }
 
 .eyebrow {
@@ -145,34 +175,33 @@ a {
 .hero-meta,
 .section-heading p,
 .card p,
+.case-card p,
+.status-card p,
 .info-value,
 .summary-copy p,
 .inline-note,
 .field small,
 .notice,
 .muted {
+  margin: 0;
   color: var(--muted);
+  line-height: 1.7;
 }
 
 .hero-actions,
 .section-heading,
-.case-card-top,
-.metric-badge-row {
+.case-card-top {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-16);
   flex-wrap: wrap;
-}
-
-.hero-actions {
-  margin-top: 22px;
 }
 
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-8);
   min-height: 46px;
   padding: 0 18px;
   border: 1px solid transparent;
@@ -203,27 +232,29 @@ a {
   background: rgba(255, 255, 255, 0.58);
 }
 
-.grid {
+.grid,
+.card-grid {
   display: grid;
-  gap: 18px;
-  margin-top: 18px;
+  gap: var(--space-24);
 }
 
-.grid.two {
+.grid.two,
+.two-column-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.grid.two.wide-left {
+.grid.two.wide-left,
+.content-split-grid {
   grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
 }
 
 .section-heading {
   justify-content: space-between;
-  margin: 0 0 18px;
+  min-width: 0;
 }
 
 .section-heading.compact {
-  margin-bottom: 12px;
+  gap: var(--space-12);
 }
 
 .step-list,
@@ -231,14 +262,14 @@ a {
   margin: 0;
   padding-left: 20px;
   display: grid;
-  gap: 10px;
+  gap: var(--space-12);
 }
 
 .case-grid,
 .slice-gallery,
 .status-grid {
   display: grid;
-  gap: 16px;
+  gap: var(--space-24);
 }
 
 .case-grid {
@@ -246,14 +277,19 @@ a {
 }
 
 .case-card {
-  display: block;
-  padding: 20px;
+  display: grid;
+  gap: var(--space-16);
+  padding: var(--card-padding);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 .case-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 20px 44px rgba(41, 36, 30, 0.12);
+}
+
+.case-card-top {
+  justify-content: space-between;
 }
 
 .pill {
@@ -268,14 +304,13 @@ a {
 
 .case-link {
   display: inline-flex;
-  margin-top: 14px;
+  align-items: center;
   color: var(--accent);
   font-weight: 700;
 }
 
 .notice {
-  margin-bottom: 18px;
-  padding: 16px 18px;
+  padding: var(--card-padding-sm);
   border-radius: 16px;
   border: 1px solid rgba(31, 42, 36, 0.08);
   background: #fff9ef;
@@ -289,18 +324,19 @@ a {
 
 .upload-form {
   display: grid;
-  gap: 18px;
+  gap: var(--space-24);
 }
 
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-20);
 }
 
 .field {
   display: grid;
-  gap: 10px;
+  gap: var(--space-12);
+  align-content: start;
 }
 
 .field span {
@@ -317,26 +353,26 @@ a {
 }
 
 .inline-note {
-  padding: 16px 18px;
+  padding: var(--card-padding-sm);
   border-radius: 16px;
   background: var(--paper-strong);
 }
 
 .info-list {
   display: grid;
-  gap: 12px;
+  gap: var(--space-16);
 }
 
 .info-row {
-  display: flex;
-  gap: 16px;
-  align-items: baseline;
-  padding-bottom: 10px;
+  display: grid;
+  grid-template-columns: minmax(96px, 120px) minmax(0, 1fr);
+  gap: var(--space-16);
+  align-items: start;
+  padding-bottom: var(--space-12);
   border-bottom: 1px dashed rgba(31, 42, 36, 0.12);
 }
 
 .info-label {
-  min-width: 88px;
   color: var(--muted);
   font-size: 0.9rem;
 }
@@ -346,14 +382,22 @@ a {
 }
 
 .metric-badge-row {
-  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-16);
 }
 
-.metric-badge {
-  min-width: 140px;
-  padding: 12px 14px;
+.metric-badge,
+.metric-card {
+  min-width: 0;
+  padding: var(--card-padding-sm);
   border-radius: 16px;
   background: #f7f7f2;
+}
+
+.metric-card {
+  display: grid;
+  gap: var(--space-8);
 }
 
 .metric-badge span {
@@ -364,7 +408,6 @@ a {
 
 .metric-badge strong {
   display: block;
-  margin-top: 6px;
   font-size: 1.2rem;
 }
 
@@ -373,11 +416,13 @@ a {
 }
 
 .status-card {
-  padding: 18px;
+  display: grid;
+  gap: var(--space-12);
+  padding: var(--card-padding-sm);
 }
 
 .status-card h3 {
-  margin: 0 0 8px;
+  margin: 0;
 }
 
 .status-card.done {
@@ -398,11 +443,6 @@ a {
   border-color: rgba(159, 45, 45, 0.18);
 }
 
-.viewer-section {
-  margin-top: 18px;
-  padding: 22px;
-}
-
 .viewer-frame {
   width: 100%;
   min-height: 720px;
@@ -417,6 +457,8 @@ a {
 
 .slice-card {
   margin: 0;
+  display: grid;
+  gap: 0;
   overflow: hidden;
   border-radius: 16px;
   background: #faf8f4;
@@ -432,14 +474,14 @@ a {
 }
 
 .slice-card figcaption {
-  padding: 10px 12px 14px;
+  padding: var(--space-12) var(--space-16) var(--space-16);
   color: var(--muted);
   font-size: 0.9rem;
 }
 
 .summary-copy {
   display: grid;
-  gap: 10px;
+  gap: var(--space-12);
 }
 
 .summary-copy p {
@@ -449,21 +491,63 @@ a {
 
 .empty-state {
   display: grid;
-  gap: 8px;
+  gap: var(--space-12);
   justify-items: start;
-  padding: 24px;
+  padding: var(--card-padding);
   border: 1px dashed rgba(31, 42, 36, 0.18);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.6);
 }
 
 .empty-state.compact {
-  padding: 20px;
+  padding: var(--card-padding-sm);
 }
 
 .empty-state h2,
 .empty-state h3 {
   margin: 0;
+}
+
+.page-header,
+.hero-card,
+.form-card,
+.info-card,
+.status-panel,
+.viewer-card,
+.slice-panel,
+.summary-panel {
+  min-width: 0;
+}
+
+.page-header {
+  align-items: end;
+}
+
+.hero-card {
+  gap: var(--space-24);
+}
+
+.sample-grid {
+  align-items: stretch;
+}
+
+.form-card {
+  gap: 0;
+}
+
+.info-card,
+.status-panel,
+.slice-panel,
+.summary-panel {
+  align-content: start;
+}
+
+.viewer-card {
+  gap: var(--space-24);
+}
+
+.content-split-grid {
+  align-items: start;
 }
 
 @media (max-width: 960px) {
@@ -475,8 +559,14 @@ a {
 
   .grid.two,
   .grid.two.wide-left,
+  .two-column-grid,
+  .content-split-grid,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .page-header {
+    align-items: flex-start;
   }
 
   .viewer-frame {
@@ -486,15 +576,47 @@ a {
 
 @media (max-width: 640px) {
   .page-shell {
-    padding-top: 22px;
+    width: min(var(--page-width), calc(100% - 24px));
+    padding-top: var(--space-24);
   }
 
   .hero,
-  .viewer-section,
   .card,
   .case-card,
   .status-card {
     padding: 18px;
+  }
+
+  .page-container,
+  .card-grid,
+  .case-grid,
+  .slice-gallery,
+  .status-grid,
+  .upload-form {
+    gap: var(--space-20);
+  }
+
+  .metric-badge-row,
+  .form-grid,
+  .info-list,
+  .summary-copy,
+  .step-list,
+  .bullet-list {
+    gap: var(--space-16);
+  }
+
+  .hero-actions {
+    width: 100%;
+  }
+
+  .hero-actions .button {
+    flex: 1 1 100%;
+  }
+
+  .info-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-8);
+    padding-bottom: var(--space-16);
   }
 
   .viewer-frame {

@@ -16,7 +16,7 @@ router = APIRouter()
 def home_page() -> HTMLResponse:
     sample_cases = list_sample_cases()
     body = f"""
-    <section class="hero card">
+    <section class="hero card hero-card">
       <div class="eyebrow">Minimal Demo</div>
       <h1>上传/选择病例，串行跑通自动分割、后处理和 3D 结果查看</h1>
       <p class="lead">页面只保留系统主链路，不再展示训练曲线、复杂对比页、大段指标看板和无关操作按钮。</p>
@@ -27,7 +27,7 @@ def home_page() -> HTMLResponse:
       <div class="hero-meta">当前已发现 {len(sample_cases)} 个稳定样例，可直接查看结果，不重新计算。</div>
     </section>
 
-    <section class="grid two">
+    <section class="card-grid two-column-grid">
       <article class="card">
         <h2>主链路</h2>
         <ol class="step-list">
@@ -77,7 +77,7 @@ def sample_cases_page() -> HTMLResponse:
         )
 
     body = f"""
-    <section class="section-heading">
+    <section class="section-heading page-header">
       <div>
         <div class="eyebrow">Sample Cases</div>
         <h1>选择样例病例</h1>
@@ -85,7 +85,7 @@ def sample_cases_page() -> HTMLResponse:
       </div>
       <a class="button ghost" href="/">返回首页</a>
     </section>
-    <section class="case-grid">
+    <section class="case-grid sample-grid">
       {cards_html}
     </section>
     """

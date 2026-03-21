@@ -13,7 +13,7 @@ router = APIRouter()
 def _render_run_form(error_message: str | None = None) -> HTMLResponse:
     notice_html = render_notice(error_message, tone="error") if error_message else ""
     body = f"""
-    <section class="section-heading">
+    <section class="section-heading page-header">
       <div>
         <div class="eyebrow">Single Case Demo</div>
         <h1>上传病例并运行</h1>
@@ -24,7 +24,7 @@ def _render_run_form(error_message: str | None = None) -> HTMLResponse:
 
     {notice_html}
 
-    <section class="card">
+    <section class="card form-card">
       <form class="upload-form" action="/run" method="post" enctype="multipart/form-data">
         <div class="form-grid">
           <label class="field">

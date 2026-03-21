@@ -30,7 +30,7 @@ def result_page(result_id: str) -> HTMLResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     metric_badges_html = "".join(
-        f"<div class=\"metric-badge\"><span>{escape(item['label'])}</span><strong>{escape(item['value'])}</strong></div>"
+        f"<div class=\"metric-badge metric-card\"><span>{escape(item['label'])}</span><strong>{escape(item['value'])}</strong></div>"
         for item in result["metric_badges"]
     )
     status_cards_html = "".join(
@@ -73,7 +73,7 @@ def result_page(result_id: str) -> HTMLResponse:
         """
 
     body = f"""
-    <section class="section-heading">
+    <section class="section-heading page-header">
       <div>
         <div class="eyebrow">Result Viewer</div>
         <h1>{escape(str(result['case_id']))}</h1>
@@ -85,21 +85,21 @@ def result_page(result_id: str) -> HTMLResponse:
       </div>
     </section>
 
-    <section class="grid two">
-      <article class="card">
+    <section class="card-grid two-column-grid">
+      <article class="card info-card">
         <h2>病例信息</h2>
         <div class="info-list">
           {_render_case_info_rows(result['case_info'])}
         </div>
         <div class="metric-badge-row">{metric_badges_html}</div>
       </article>
-      <article class="card">
+      <article class="card status-panel">
         <h2>处理状态</h2>
         <div class="status-grid">{status_cards_html}</div>
       </article>
     </section>
 
-    <section class="card viewer-section">
+    <section class="card viewer-card">
       <div class="section-heading compact">
         <div>
           <h2>3D 结果展示</h2>
@@ -109,12 +109,12 @@ def result_page(result_id: str) -> HTMLResponse:
       {viewer_html}
     </section>
 
-    <section class="grid two wide-left">
-      <article class="card">
+    <section class="card-grid content-split-grid">
+      <article class="card slice-panel">
         <h2>2D 切片 / 叠加图</h2>
-        <div class="slice-gallery">{slice_gallery_html}</div>
+        <div class="slice-gallery slice-grid">{slice_gallery_html}</div>
       </article>
-      <article class="card">
+      <article class="card summary-panel">
         <h2>简短说明</h2>
         <div class="summary-copy">
           {summary_html}

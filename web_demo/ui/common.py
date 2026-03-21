@@ -36,7 +36,9 @@ def render_page(title: str, body: str, active_nav: str) -> HTMLResponse:
     </div>
   </header>
   <main class="page-shell">
-    {body}
+    <div class="page-container">
+      {body}
+    </div>
   </main>
   <footer class="footer">
     <span>最小演示版仅保留单病例流程，不包含任务队列、数据库和科研看板。</span>
