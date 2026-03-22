@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% if page_mode == "form" %}
+    <section class="section-heading page-header">
+      <div>
+        <div class="eyebrow">Single Case Demo</div>
+        <h1>上传病例并运行</h1>
+        <p>当前仅支持单病例串行处理。页面会复用现有推理脚本、后处理逻辑和 3D HTML 生成脚本。</p>
+      </div>
+      <a class="button ghost" href="/">返回首页</a>
+    </section>
+
+    {% if notice %}
+      <div class="notice {{ notice.tone }}">{{ notice.message }}</div>
+    {% endif %}
+
+    <section class="card form-card">
+      <form class="upload-form" id="run-form" action="/run" method="post" enctype="multipart/form-data">
+        <div class="form-grid">
+          <label class="field">
+            <span>本机病例目录</span>
+            <input type="text" name="case_dir" placeholder="例如：D:/proj/.../BraTS2021_00526">
+            <small>优先支持单病例目录，目录内应包含 t1 / t1ce / t2 / flair 四个模态。</small>
+          </label>
+
+          <label class="field">
+            <span>上传病例文件</span>
+            <input type="file" name="files" multiple accept=".nii,.nii.gz">
+            <small>可直接上传单病例所需 NIfTI 文件，后端会先落盘，再进入串行处理流程。</small>
+          </label>
+
+          <label class="field">
+            <span>上传病例目录</span>
+            <input type="file" name="files" multiple webkitdirectory directory>
+            <small>兼容 Chromium 目录上传；当前仍按单病例串行 demo 执行。</small>
+          </label>
+        </div>
+
+        <div class="inline-note">
+          <strong>说明：</strong> 当前实现优先补齐可轮询的等待页、阶段状态与日志 tail，不引入 websocket、celery 或复杂队列。
+        </div>
+
+        <div class="hero-actions">
+          <button class="button primary" id="run-submit" type="submit">开始处理</button>
+          <a class="button secondary" href="/samples">先看样例结果</a>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="section-heading page-header">
+      <div>
+        <div class="eyebrow">Pipeline Running</div>
+        <h1>正在处理病例</h1>
+        <p>页面会定时轮询当前任务状态，并展示最近日志。任务完成后会自动提供结果入口。</p>
+      </div>
+      <div class="hero-actions">
+        <a class="button ghost" href="/run">返回上传页</a>
+        <a class="button secondary" href="/samples">查看样例</a>
+      </div>
+    </section>
+
+    <section class="card job-overview-card" id="run-wait-root" data-status-url="/api/runs/{{ run_id }}">
+      <div class="job-status-header">
+        <div class="job-status-chip is-running" id="job-status-chip">处理中</div>
+        <div class="job-status-copy">
+          <h2 id="job-current-stage">已接收病例</h2>
+          <p id="job-message">病例文件已接收，等待进入自动分割。</p>
+        </div>
+      </div>
+      <div class="job-meta-grid">
+        <article class="metric-card job-meta-card">
+          <span>病例 ID</span>
+          <strong id="job-case-id">{{ initial_state.case_id }}</strong>
+        </article>
+        <article class="metric-card job-meta-card">
+          <span>Run ID</span>
+          <strong id="job-run-id">{{ initial_state.run_id }}</strong>
+        </article>
+        <article class="metric-card job-meta-card">
+          <span>来源</span>
+          <strong id="job-source-type">{{ initial_state.source_type }}</strong>
+        </article>
+        <article class="metric-card job-meta-card">
+          <span>结果目录</span>
+          <strong id="job-result-dir">{{ initial_state.result_dir }}</strong>
+        </article>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading compact">
+        <div>
+          <h2>阶段状态</h2>
+          <p>当前为串行 demo，不展示百分比，只展示明确阶段切换。</p>
+        </div>
+      </div>
+      <div class="job-stage-grid" id="job-stage-grid"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading compact">
+        <div>
+          <h2>后台日志</h2>
+          <p>展示最近 40 行日志，便于判断当前执行到哪一步。</p>
+        </div>
+      </div>
+      <pre class="job-log-panel" id="job-log-panel">等待日志输出...</pre>
+      <div class="hero-actions job-action-row">
+        <a class="button primary" id="job-result-link" href="#" hidden>查看结果</a>
+        <span class="job-redirect-note" id="job-redirect-note" hidden>处理完成，正在跳转结果页...</span>
+      </div>
+    </section>
+
+    <script id="run-initial-state" type="application/json">{{ initial_state_json | safe }}</script>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if page_mode == "form" %}
+    <script>
+      window.addEventListener("DOMContentLoaded", () => window.WebDemo?.initRunForm());
+    </script>
+  {% else %}
+    <script>
+      window.addEventListener("DOMContentLoaded", () => window.WebDemo?.initRunWaitPage());
+    </script>
+  {% endif %}
+{% endblock %}

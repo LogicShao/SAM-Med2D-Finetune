@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="section-heading page-header">
+    <div>
+      <div class="eyebrow">Result Viewer</div>
+      <h1>{{ result.case_id }}</h1>
+      <p>{{ result.note }}</p>
+    </div>
+    <div class="hero-actions">
+      <a class="button ghost" href="/samples">更多样例</a>
+      <a class="button secondary" href="/run">上传新病例</a>
+    </div>
+  </section>
+
+  <section class="card-grid two-column-grid">
+    <article class="card info-card">
+      <h2>病例信息</h2>
+      <div class="info-list">
+        {% for item in result.case_info %}
+          <div class="info-row">
+            <span class="info-label">{{ item.label }}</span>
+            <span class="info-value">{{ item.value }}</span>
+          </div>
+        {% endfor %}
+      </div>
+      {% if result.metric_badges %}
+        <div class="metric-badge-row">
+          {% for item in result.metric_badges %}
+            <div class="metric-badge metric-card">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </article>
+
+    <article class="card status-panel">
+      <h2>处理状态</h2>
+      <div class="status-grid">
+        {% for card in result.status_cards %}
+          <article class="status-card {{ card.state }}">
+            <h3>{{ card.label }}</h3>
+            <p>{{ card.detail }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="card viewer-card">
+    <div class="section-heading compact">
+      <div>
+        <h2>3D 结果展示</h2>
+        <p>直接复用已有 HTML 预览文件，通过 iframe 嵌入当前结果页。</p>
+      </div>
+    </div>
+    {% if result.viewer_url %}
+      <iframe class="viewer-frame" src="{{ result.viewer_url }}" loading="lazy"></iframe>
+    {% else %}
+      <div class="empty-state compact">
+        <h3>未找到 3D HTML 预览</h3>
+        <p>当前结果目录中没有可嵌入的 viewer.html 或 preview_3d*.html。</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="card-grid content-split-grid">
+    <article class="card slice-panel">
+      <h2>2D 切片 / 叠加图</h2>
+      <div class="slice-gallery slice-grid">
+        {% if result.slice_images %}
+          {% for item in result.slice_images %}
+            <figure class="slice-card">
+              <img src="{{ item.url }}" alt="{{ item.label }}">
+              <figcaption>{{ item.label }}</figcaption>
+            </figure>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state compact">
+            <h3>暂无 2D 切片图</h3>
+            <p>当前结果目录缺少可复用切片图，且未能按需生成叠加图。</p>
+          </div>
+        {% endif %}
+      </div>
+    </article>
+
+    <article class="card summary-panel">
+      <h2>简短说明</h2>
+      <div class="summary-copy">
+        {% for line in result.summary_lines %}
+          <p>{{ line }}</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+{% endblock %}

@@ -1,0 +1,13 @@
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand-block">
+      <a class="brand-link" href="/">{{ app_name }}</a>
+      <p class="brand-copy">{{ app_description }}</p>
+    </div>
+    <nav class="nav-links">
+      {% for item in nav_items %}
+        <a class="nav-link{% if item.key == active_nav %} active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
