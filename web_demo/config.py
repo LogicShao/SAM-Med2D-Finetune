@@ -53,7 +53,7 @@ PIPELINE_SUMMARY_FILE = "summary.json"
 
 DEFAULT_SAM_CHECKPOINT = PROJECT_ROOT / "pretrain_model" / "sam-med2d_b.pth"
 DEFAULT_FINETUNED_CHECKPOINT = (
-    PROJECT_ROOT / "workdir_multi_task" / "models" / "finetune_no_stop_lora" / "lora_adapters"
+    PROJECT_ROOT / "workdir_multi_task" / "models" / "finetune_adapter" / "best_model.pth"
 )
 DEFAULT_YOLO_CHECKPOINT = PROJECT_ROOT / "workdir_yolo" / "brats_yolo_dev_img320_v8m" / "weights" / "best.pt"
 
@@ -70,7 +70,7 @@ def default_device() -> str:
 DEFAULT_INFERENCE_ARGS = {
     "sam_checkpoint": DEFAULT_SAM_CHECKPOINT,
     "finetuned_checkpoint": DEFAULT_FINETUNED_CHECKPOINT,
-    "finetune_method": "lora",
+    "finetune_method": "adapter",
     "prompt_mode": "yolo_box",
     "model_type": "vit_b",
     "image_size": 256,

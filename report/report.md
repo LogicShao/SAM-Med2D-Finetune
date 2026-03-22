@@ -24,7 +24,7 @@
 
 - 已将系统推进为整病例自动分割闭环，而非仅切片级实验；
 - 已建立固定病例集的正式回归流程，能够对不同 prompt 策略进行可重复对比；
-- 已完成 `WT-only continuity` PoC 以及 `WT gate` 收敛实验，形成“baseline 默认主配置 + g4 机制验证对照”的冻结建议。
+- 已完成 `WT-only continuity` PoC 以及 `WT gate` 收敛实验，形成“Adapter baseline 默认主配置 + g4 机制验证对照”的冻结建议。
 
 因此，项目当前状态与申报目标的衔接关系可以概括为：算法主线和展示主线已经具备原型基础，结项阶段更适合以“展示优先、复用现有结果、适度保留在线推理”为策略，完成科技实物形式的整合与说明。
 
@@ -36,7 +36,7 @@
 支持 BraTS 原始 `NIfTI` 病例读取、四模态输入组织、训练与推理所需的切片级数据准备。
 
 2. 模型层  
-支持 `SAM-Med2D` 的单任务与多任务微调；当前整病例自动推理的默认主模型应切换为多任务 `Adapter` 检查点，既有 `fixed20`、`hard8`、`confirm_large_unseen` 正式回归结果则来自此前固定的多任务 `LoRA` 主模型。
+支持 `SAM-Med2D` 的单任务与多任务微调；当前整病例自动推理的默认主模型已完成 `Adapter` 口径补证，应切换并冻结为多任务 `Adapter` 检查点；既有 `fixed20`、`hard8`、`confirm_large_unseen` 正式回归结果则来自此前固定的多任务 `LoRA` 主模型，补充结果详见 `adapter_verification.md`。
 
 3. 自动提示层  
 通过 `YOLO` 检测器为 `SAM-Med2D` 提供自动 bbox prompt，当前正式基线工作点已固定为 `conf=0.05, iou=0.60`。
@@ -179,17 +179,19 @@
 
 这一结果说明：`g4` 在 fixed20 上的收益结论并没有在更大未见样本上稳定复现。虽然 `ET/TC` 仍保持不退化，但 `WT` 与 overall 均出现轻微回退，因此当前不能再将 `g4` 表述为“更大样本默认最优配置”。
 
+需要补充的是，上述结论仅对应历史多任务 `LoRA` 主模型；补充完成的 `Adapter` 验证显示，`Adapter g4` 在同一 `confirm_large_unseen` 集合上恢复为 `+0.001433` overall、`+0.004300` WT 的小幅正增益，但这仍不足以改写 baseline 作为默认入口的角色，详见 `adapter_verification.md`。
+
 结合 fixed20 与 `confirm_large_unseen` 两轮证据，可以冻结的判断是：
 
 1. `WT-only continuity` 作为机制方向是成立的；
 2. `g4` 可作为 `WT missing_box` 补救机制的展示配置；
 3. 若以更大未参与调参样本作为结项主证据，baseline 仍是更稳妥的默认主对照。
 
-## 历史推荐配置（基于多任务 LoRA 主模型）
+## 历史推荐配置（基于多任务 LoRA 主模型，仅作历史机制对照）
 
 结合 fixed20 与 `confirm_large_unseen` 的现有结果，在既有多任务 `LoRA` 主模型口径下，更适合冻结三套角色清晰的配置：baseline 作为正式主对照与稳妥默认，`g4` 作为 `WT-only continuity` 展示参考组，`g0` 作为高收益研究参考组。
 
-但需要明确：由于当前 pipeline 默认主模型应切换为多任务 `Adapter`，下述三套配置只能作为旧 `LoRA` 主模型下的历史冻结口径与策略参考，不能直接等同于当前 `Adapter` pipeline 的正式默认。若要形成新的正式默认，至少需要在多任务 `Adapter` 主模型上补跑 `fixed20` 与 `confirm_large_unseen` 的 baseline / g4 对照。
+但需要明确：由于当前 pipeline 默认主模型应切换为多任务 `Adapter`，下述三套配置只能作为旧 `LoRA` 主模型下的历史冻结口径与策略参考，不能直接等同于当前 `Adapter` pipeline 的正式默认；关于已补齐的多任务 `Adapter` baseline / g4 对照结果，详见 `adapter_verification.md`。
 
 ### 1. 正式主对照与稳妥默认配置
 
@@ -199,7 +201,7 @@
 - `WT continuity: disabled`
 - 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
 
-这套配置对应既有多任务 `LoRA` 主模型下的正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此在旧口径下更适合作为主对照与稳妥默认。
+这套配置对应既有多任务 `LoRA` 主模型下的正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此在旧口径下更适合作为主对照与稳妥默认；当前正式默认则应以 `adapter_verification.md` 中已补齐的 `Adapter baseline` 为准。
 
 ### 2. WT-only continuity 展示参考配置
 
@@ -261,7 +263,7 @@
 页面至少包含以下三部分：
 
 1. 首页  
-展示项目简介、技术路线、当前冻结结论，并明确写出：baseline 是默认主配置，g4 只是机制验证对照组。
+展示项目简介、技术路线、当前冻结结论，并明确写出：`Adapter baseline` 是默认主配置，g4 只是机制验证对照组。
 
 2. 病例选择页  
 支持选择 `fixed20`、`hard8`、`confirm_large_unseen` 中的样例病例，并给出典型病例分组说明。
@@ -273,10 +275,10 @@
 
 结项展示阶段必须内置以下口径：
 
-- baseline 作为默认展示配置；
+- `Adapter baseline` 作为默认展示配置；
 - g4 用于展示 `WT missing_box` 补救机制与 fixed20 上的正信号；
-- confirm_large_unseen 167 例不支持将 g4 表述为更优默认配置；
-- 典型病例应覆盖 baseline 稳定样例、fixed20 上的 WT-only 正信号样例，以及 confirm_large_unseen 上的 g4 回退样例。
+- `Adapter g4` 在 `confirm_large_unseen` 上虽保持小幅正增益，但不应表述为唯一默认配置；
+- 典型病例应覆盖 baseline 稳定样例、fixed20 上的 WT-only 正信号样例，以及 g4 触发收益与触发伤害并存的说明样例。
 
 ### 5. 在线推理定位
 
@@ -304,7 +306,7 @@
 
 下一步建议如下：
 
-1. 以 baseline 作为结项主对照配置，按需展示 `g4` 作为 `WT-only continuity` 的机制样例。
+1. 以 `Adapter baseline` 作为结项主对照配置，按需展示 `g4` 作为 `WT-only continuity` 的机制样例。
 2. 保留 `g0` 作为研究参考组，用于说明“高收益但误触发更多”的技术权衡。
 3. 若仍有少量实验空间，优先分析 `WT missing_box` 长段传播导致的 `harm` 病例，不建议再回到全类 continuity 或大规模扫参。
 4. 将当前结果整理为图文并茂的结项材料，而不是继续扩展新的算法分支。
@@ -325,7 +327,7 @@
 4. 核心结果说明  
 整理一份简明结果说明，冻结以下内容：
 - 系统闭环已经完成；
-- baseline 已固定；
+- `Adapter baseline` 已固定为当前默认口径，`LoRA baseline` 保留为历史对照；
 - 全类 `smooth / interpolate` 无稳定收益；
 - `WT-only continuity` 已成立；
 - `g4` 仅作为 `WT-only continuity` 的机制验证对照配置；

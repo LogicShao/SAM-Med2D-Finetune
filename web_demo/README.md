@@ -55,10 +55,10 @@ pip install -r requirements.txt
 
 当前 Web demo 默认整病例推理主模型为：
 
-- checkpoint：`workdir_multi_task/models/finetune_no_stop_lora/lora_adapters`
-- `finetune_method`：`lora`
+- checkpoint：`workdir_multi_task/models/finetune_adapter/best_model.pth`
+- `finetune_method`：`adapter`
 
-之所以暂时继续保留这套配置，是为了与既有整病例回归结果和展示样例保持一致；后续可在补齐 `Adapter` 版正式回归后再统一切换默认 pipeline。
+这套默认配置已经与 `report/adapter_verification.md` 中补齐的正式 Adapter 验证保持一致：默认展示组使用 `Adapter baseline`；`g4` 继续保留为可选的 `WT-only continuity` 机制验证入口，但不替代 baseline 成为唯一默认。
 
 ## 启动
 
