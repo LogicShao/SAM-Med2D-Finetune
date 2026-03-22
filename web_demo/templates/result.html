@@ -3,13 +3,13 @@
 {% block content %}
   <section class="section-heading page-header">
     <div>
-      <div class="eyebrow">Result Viewer</div>
+      <div class="eyebrow">结果查看</div>
       <h1>{{ result.case_id }}</h1>
       <p>{{ result.note }}</p>
     </div>
     <div class="hero-actions">
-      <a class="button ghost" href="/samples">更多样例</a>
-      <a class="button secondary" href="/run">上传新病例</a>
+      <a class="button ghost" href="/samples">返回病例列表</a>
+      <a class="button secondary" href="/run">处理新病例</a>
     </div>
   </section>
 
@@ -49,26 +49,68 @@
     </article>
   </section>
 
+  <section class="card analysis-panel">
+    <div class="section-heading compact">
+      <div>
+        <h2>定量分析</h2>
+        <p>三维定量结果基于当前分割结果自动计算，可用于辅助观察病灶范围与分区分布。</p>
+      </div>
+    </div>
+    {% if result.analysis.available %}
+      <div class="analysis-grid">
+        {% for item in result.analysis.display_cards %}
+          <article class="metric-card analysis-card{% if item.emphasis %} emphasis{% endif %}">
+            <span class="analysis-label">{{ item.label }}</span>
+            <strong class="analysis-value">{{ item.volume_text }}</strong>
+            <span class="analysis-meta">{{ item.voxels_text }}</span>
+          </article>
+        {% endfor %}
+      </div>
+      <div class="analysis-meta-grid">
+        <article class="metric-card analysis-meta-card">
+          <span>体素间距</span>
+          <strong>{{ result.analysis.spacing_text }}</strong>
+        </article>
+        <article class="metric-card analysis-meta-card">
+          <span>说明</span>
+          <strong>{{ result.analysis.primary_note }}</strong>
+        </article>
+      </div>
+      {% if result.analysis.notes %}
+        <div class="analysis-note-list">
+          {% for note in result.analysis.notes %}
+            <p>{{ note }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="empty-state compact">
+        <h3>定量信息暂不可用</h3>
+        <p>{{ result.analysis.primary_note }}</p>
+      </div>
+    {% endif %}
+  </section>
+
   <section class="card viewer-card">
     <div class="section-heading compact">
       <div>
-        <h2>3D 结果展示</h2>
-        <p>直接复用已有 HTML 预览文件，通过 iframe 嵌入当前结果页。</p>
+        <h2>三维可视化结果</h2>
+        <p>可在当前页面查看病例三维可视化结果。</p>
       </div>
     </div>
     {% if result.viewer_url %}
       <iframe class="viewer-frame" src="{{ result.viewer_url }}" loading="lazy"></iframe>
     {% else %}
       <div class="empty-state compact">
-        <h3>未找到 3D HTML 预览</h3>
-        <p>当前结果目录中没有可嵌入的 viewer.html 或 preview_3d*.html。</p>
+        <h3>暂未生成三维结果</h3>
+        <p>当前病例结果中暂无可显示的三维可视化内容。</p>
       </div>
     {% endif %}
   </section>
 
   <section class="card-grid content-split-grid">
     <article class="card slice-panel">
-      <h2>2D 切片 / 叠加图</h2>
+      <h2>关键切片 / 分割叠加</h2>
       <div class="slice-gallery slice-grid">
         {% if result.slice_images %}
           {% for item in result.slice_images %}
@@ -79,15 +121,15 @@
           {% endfor %}
         {% else %}
           <div class="empty-state compact">
-            <h3>暂无 2D 切片图</h3>
-            <p>当前结果目录缺少可复用切片图，且未能按需生成叠加图。</p>
+            <h3>暂未生成切片图像</h3>
+            <p>当前病例结果中暂无可显示的切片或叠加图像。</p>
           </div>
         {% endif %}
       </div>
     </article>
 
     <article class="card summary-panel">
-      <h2>简短说明</h2>
+      <h2>结果说明</h2>
       <div class="summary-copy">
         {% for line in result.summary_lines %}
           <p>{{ line }}</p>

@@ -46,7 +46,7 @@ def list_sample_cases(max_total: int = 6) -> list[DemoCase]:
                     result_dir=case_dir,
                     source_label=str(collection["label"]),
                     source_tag=str(collection["tag"]),
-                    summary="直接复用已有 outputs 结果，不重新计算。",
+                    summary="病例处理结果已生成，可直接查看。",
                 )
             )
             seen_case_ids.add(case_id)

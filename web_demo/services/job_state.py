@@ -10,11 +10,11 @@ from uuid import uuid4
 
 
 STAGE_DEFINITIONS = (
-    {"key": "received", "label": "已接收病例"},
+    {"key": "received", "label": "病例已接收"},
     {"key": "inference", "label": "自动分割中"},
-    {"key": "postprocess", "label": "后处理中"},
-    {"key": "visualization", "label": "3D 重建中"},
-    {"key": "terminal", "label": "已完成 / 失败"},
+    {"key": "postprocess", "label": "结果处理中"},
+    {"key": "visualization", "label": "三维模型生成中"},
+    {"key": "terminal", "label": "处理完成 / 失败"},
 )
 
 STAGE_LABELS = {item["key"]: item["label"] for item in STAGE_DEFINITIONS}
@@ -40,7 +40,7 @@ def build_run_id(case_id: str) -> str:
 
 def _build_stage_items() -> list[dict[str, str]]:
     return [
-        {"key": item["key"], "label": item["label"], "state": "pending", "message": "等待执行"}
+        {"key": item["key"], "label": item["label"], "state": "pending", "message": "等待处理"}
         for item in STAGE_DEFINITIONS
     ]
 
@@ -78,7 +78,7 @@ def create_job(
 ) -> dict[str, Any]:
     stages = _build_stage_items()
     stages[0]["state"] = "success"
-    stages[0]["message"] = "病例文件已接收，等待进入自动分割"
+    stages[0]["message"] = "病例数据已接收，等待开始处理"
     now_text = _now_text()
     job = {
         "run_id": run_id,
@@ -90,7 +90,7 @@ def create_job(
         "result_url": None,
         "log_path": str(log_path),
         "status": "running",
-        "message": "病例文件已接收，等待进入自动分割",
+        "message": "病例数据已接收，等待开始处理",
         "current_stage": "received",
         "current_stage_label": STAGE_LABELS["received"],
         "failed_stage": None,
@@ -156,7 +156,7 @@ def fail_job(run_id: str, *, stage_key: str, message: str) -> dict[str, Any]:
         failed_stage["message"] = message
         terminal = _find_stage(job, "terminal")
         terminal["state"] = "failed"
-        terminal["message"] = "任务执行失败"
+        terminal["message"] = "处理失败"
         job["status"] = "failed"
         job["message"] = message
         job["current_stage"] = stage_key
@@ -171,4 +171,3 @@ def fail_job(run_id: str, *, stage_key: str, message: str) -> dict[str, Any]:
 def get_job(run_id: str) -> dict[str, Any]:
     with _LOCK:
         return deepcopy(_require_run(run_id))
-

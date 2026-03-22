@@ -304,7 +304,7 @@ def run_visualization(result_dir: Path) -> dict[str, Any]:
     completed = _run_command(command, cwd=PROJECT_ROOT)
     viewer_file = find_viewer_file(result_dir)
     if viewer_file is None:
-        raise FileNotFoundError("3D HTML 预览未生成成功。")
+        raise FileNotFoundError("三维结果未生成成功。")
     return {
         "viewer_file": str(viewer_file.resolve()),
         "stdout": completed.stdout.strip(),
@@ -322,24 +322,24 @@ def run_full_pipeline(case_input: dict[str, Any]) -> dict[str, Any]:
     _write_json(summary_path, summary)
 
     try:
-        _update_step(summary, "自动分割", "running", "正在调用 infer_volume.py")
+        _update_step(summary, "自动分割", "running", "正在进行自动分割")
         _write_json(summary_path, summary)
         run_inference(case_input)
-        _update_step(summary, "自动分割", "done", "已生成 ET / TC / WT / combined_label")
+        _update_step(summary, "自动分割", "done", "分割结果已生成")
         summary["artifacts"]["case_meta"] = str((result_dir / "case_meta.json").resolve())
         _write_json(summary_path, summary)
 
-        _update_step(summary, "后处理", "running", "正在生成 post_* 结果")
+        _update_step(summary, "后处理", "running", "正在进行结果处理")
         _write_json(summary_path, summary)
         postprocess_result = run_postprocess(result_dir)
-        _update_step(summary, "后处理", "done", "已完成 3D 后处理与层级约束")
+        _update_step(summary, "后处理", "done", "后处理完成")
         summary["artifacts"]["postprocess_report"] = str(postprocess_result["report_path"].resolve())
         _write_json(summary_path, summary)
 
-        _update_step(summary, "3D 重建", "running", "正在调用 visualize_case.py")
+        _update_step(summary, "3D 重建", "running", "正在生成三维结果")
         _write_json(summary_path, summary)
         visualization_result = run_visualization(result_dir)
-        _update_step(summary, "3D 重建", "done", "HTML 预览已生成")
+        _update_step(summary, "3D 重建", "done", "三维结果已生成")
         summary["artifacts"]["viewer"] = visualization_result["viewer_file"]
         summary["status"] = "completed"
         summary["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -664,7 +664,7 @@ def run_visualization(result_dir: Path, run_logger: RunLogger | None = None) -> 
     completed = _run_command(command, cwd=PROJECT_ROOT, run_logger=run_logger)
     viewer_file = find_viewer_file(result_dir)
     if viewer_file is None:
-        raise FileNotFoundError("3D HTML 预览未生成成功。")
+        raise FileNotFoundError("三维结果未生成成功。")
     return {"viewer_file": str(viewer_file.resolve()), "stdout": completed["stdout"]}
 
 
@@ -699,15 +699,15 @@ def run_full_pipeline(
         if run_logger is not None:
             run_logger.info("开始自动分割")
         if run_id is not None:
-            start_stage(run_id, current_stage_key, "正在执行自动分割脚本 infer_volume.py")
-        _update_summary_step_v2(summary, current_stage_key, "running", "正在执行 infer_volume.py")
+            start_stage(run_id, current_stage_key, "正在进行自动分割")
+        _update_summary_step_v2(summary, current_stage_key, "running", "正在进行自动分割")
         _write_json(summary_path, summary)
         run_inference(case_input, run_logger=run_logger)
         if run_logger is not None:
             run_logger.info("自动分割完成")
         if run_id is not None:
-            finish_stage(run_id, current_stage_key, "自动分割完成，已生成 ET / TC / WT / combined_label")
-        _update_summary_step_v2(summary, current_stage_key, "done", "已生成 ET / TC / WT / combined_label")
+            finish_stage(run_id, current_stage_key, "自动分割完成，分割结果已生成")
+        _update_summary_step_v2(summary, current_stage_key, "done", "分割结果已生成")
         summary["artifacts"]["case_meta"] = str((result_dir / "case_meta.json").resolve())
         _write_json(summary_path, summary)
 
@@ -716,30 +716,30 @@ def run_full_pipeline(
             run_logger.info("开始后处理")
         if run_id is not None:
             start_stage(run_id, current_stage_key, "正在执行后处理")
-        _update_summary_step_v2(summary, current_stage_key, "running", "正在生成 post_* 结果")
+        _update_summary_step_v2(summary, current_stage_key, "running", "正在进行结果处理")
         _write_json(summary_path, summary)
         postprocess_result = run_postprocess(result_dir, run_logger=run_logger)
         if run_logger is not None:
             run_logger.info("后处理完成")
         if run_id is not None:
-            finish_stage(run_id, current_stage_key, "后处理完成，已生成 post_* 结果")
-        _update_summary_step_v2(summary, current_stage_key, "done", "已完成后处理并生成 post_* 结果")
+            finish_stage(run_id, current_stage_key, "后处理完成，结果已更新")
+        _update_summary_step_v2(summary, current_stage_key, "done", "后处理完成")
         summary["artifacts"]["postprocess_report"] = str(postprocess_result["report_path"].resolve())
         _write_json(summary_path, summary)
 
         current_stage_key = "visualization"
         if run_logger is not None:
-            run_logger.info("开始 3D 重建/可视化")
+            run_logger.info("开始三维模型生成")
         if run_id is not None:
-            start_stage(run_id, current_stage_key, "正在执行 3D 重建与可视化")
-        _update_summary_step_v2(summary, current_stage_key, "running", "正在执行 visualize_case.py")
+            start_stage(run_id, current_stage_key, "正在生成三维结果")
+        _update_summary_step_v2(summary, current_stage_key, "running", "正在生成三维结果")
         _write_json(summary_path, summary)
         visualization_result = run_visualization(result_dir, run_logger=run_logger)
         if run_logger is not None:
-            run_logger.info("3D 重建完成")
+            run_logger.info("三维模型生成完成")
         if run_id is not None:
-            finish_stage(run_id, current_stage_key, "3D HTML 结果已生成")
-        _update_summary_step_v2(summary, current_stage_key, "done", "3D HTML 结果已生成")
+            finish_stage(run_id, current_stage_key, "三维模型已生成")
+        _update_summary_step_v2(summary, current_stage_key, "done", "三维模型已生成")
         summary["artifacts"]["viewer"] = visualization_result["viewer_file"]
 
         result_id = encode_result_id(result_dir)

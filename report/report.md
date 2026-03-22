@@ -36,7 +36,7 @@
 支持 BraTS 原始 `NIfTI` 病例读取、四模态输入组织、训练与推理所需的切片级数据准备。
 
 2. 模型层  
-支持 `SAM-Med2D` 的单任务与多任务微调；当前整病例自动推理使用多任务 `LoRA` 检查点。
+支持 `SAM-Med2D` 的单任务与多任务微调；当前整病例自动推理的默认主模型应切换为多任务 `Adapter` 检查点，既有 `fixed20`、`hard8`、`confirm_large_unseen` 正式回归结果则来自此前固定的多任务 `LoRA` 主模型。
 
 3. 自动提示层  
 通过 `YOLO` 检测器为 `SAM-Med2D` 提供自动 bbox prompt，当前正式基线工作点已固定为 `conf=0.05, iou=0.60`。
@@ -63,20 +63,25 @@
 
 | 配置 | 最佳验证 Dice | 最佳验证 IoU | 结论 |
 | --- | ---: | ---: | --- |
-| 单任务 Adapter | 0.8335 | 0.7402 | 当前训练日志中表现最好，收敛也最快 |
-| 单任务 LoRA | 0.8113 | 0.6966 | 明显优于原始基线 |
+| 单任务 WT Adapter | 0.8335 | 0.7402 | 对应 `workdir_label_WT`，即仅对 `WT` 做二值分割，当前单任务日志中表现最好 |
+| 单任务 WT LoRA | 0.8113 | 0.6966 | 对应 `workdir_label_WT`，即仅对 `WT` 做二值分割，明显优于原始基线 |
+| 多任务 Adapter | 0.7560 | 0.6619 | 当前多任务训练日志中表现最好，应作为默认 pipeline 主模型 |
 | 多任务 LoRA | 0.7265 | 0.6215 | 低于单任务，但符合多类别任务更复杂的预期 |
 | 原始基线 | 0.5303 | 0.3882 | 作为对照参考 |
 
-训练阶段结论可以冻结为：微调本身是有效的，模型能力上限已被验证；当前系统瓶颈已经从“模型是否能学到”转移到“自动 prompt 质量与整病例推理策略是否稳定”。
+这里的“单任务”容易产生歧义，需要额外说明：单任务路径不是同时输出 `WT / TC / ET` 的多类任务，而是“每次只学习一个二值 mask”的训练范式。仓库当前确实存在 `WT`、`WT_TC`、`WT_TC_ET` 三套单任务数据与工作目录，但本表中的两项单任务结果具体对应 `WT` only，即 `workdir_label_WT` 这一组历史日志；`WT_TC` 与 `WT_TC_ET` 没有纳入当前结项表格。
+
+训练阶段结论可以冻结为：微调本身是有效的，模型能力上限已被验证；当前系统瓶颈已经从“模型是否能学到”转移到“自动 prompt 质量与整病例推理策略是否稳定”。需要补充说明的是，当前训练日志显示多任务 `Adapter` 明显优于多任务 `LoRA`，因此此前把多任务 `LoRA` 继续作为整病例 pipeline 默认主模型，应视为口径上的历史失误。
+
+下面 `fixed20`、`hard8`、`confirm_large_unseen` 等策略回归数据，仍然保留为“固定多任务 `LoRA` 主模型下的历史对比证据”。这些结果可以支持 prompt / continuity 机制分析，但不应再直接表述为当前多任务 `Adapter` pipeline 的正式默认配置。
 
 ### 2. 系统阶段结论
 
 当前系统已从单纯训练模型推进到 `YOLO 检测框 -> SAM-Med2D 分割 -> 3D 后处理 -> 3D 可视化` 的整病例闭环。这一结论已经由仓库现有整病例推理、后处理、HTML 预览与批量回归结果共同支撑。
 
-### 3. 正式 baseline 结论
+### 3. 历史正式 baseline 结论（多任务 LoRA 主模型）
 
-当前正式 baseline 已固定为：
+在既有多任务 `LoRA` 主模型回归中，正式 baseline 固定为：
 
 - detector: `conf=0.05, iou=0.60`
 - prompt policy: `top1`
@@ -89,7 +94,7 @@
 - `TC post Dice = 0.515366`
 - `WT post Dice = 0.683878`
 
-这组配置应视为当前全项目的正式对照基线。
+这组配置应视为既有多任务 `LoRA` 主模型回归口径下的正式对照基线。
 
 ### 4. 全类 smooth / interpolate 结论
 
@@ -164,7 +169,7 @@
 
 在固定 20 例之外，项目又补做了 `confirm_large_unseen` 大样本确认实验。该集合包含 167 例病例，来源于当前验证集全部 187 例中排除 `fixed20` 与 `hard8` 后得到的更大未参与调参样本。
 
-本轮只比较 baseline 与 `g4`，不再调参、不改模型、不改代码逻辑。结果如下：
+本轮只比较 baseline 与 `g4`，不再调参、不改模型、不改代码逻辑。这里固定的模型底座仍是当时的多任务 `LoRA` 主模型。结果如下：
 
 - baseline：`post Mean Dice = 0.536181`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.620401`
 - `g4`：`post Mean Dice = 0.535515`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.618403`
@@ -180,9 +185,11 @@
 2. `g4` 可作为 `WT missing_box` 补救机制的展示配置；
 3. 若以更大未参与调参样本作为结项主证据，baseline 仍是更稳妥的默认主对照。
 
-## 推荐默认配置
+## 历史推荐配置（基于多任务 LoRA 主模型）
 
-结合 fixed20 与 `confirm_large_unseen` 的现有结果，当前更适合冻结三套角色清晰的配置：baseline 作为正式主对照与稳妥默认，`g4` 作为 `WT-only continuity` 展示参考组，`g0` 作为高收益研究参考组。
+结合 fixed20 与 `confirm_large_unseen` 的现有结果，在既有多任务 `LoRA` 主模型口径下，更适合冻结三套角色清晰的配置：baseline 作为正式主对照与稳妥默认，`g4` 作为 `WT-only continuity` 展示参考组，`g0` 作为高收益研究参考组。
+
+但需要明确：由于当前 pipeline 默认主模型应切换为多任务 `Adapter`，下述三套配置只能作为旧 `LoRA` 主模型下的历史冻结口径与策略参考，不能直接等同于当前 `Adapter` pipeline 的正式默认。若要形成新的正式默认，至少需要在多任务 `Adapter` 主模型上补跑 `fixed20` 与 `confirm_large_unseen` 的 baseline / g4 对照。
 
 ### 1. 正式主对照与稳妥默认配置
 
@@ -192,7 +199,7 @@
 - `WT continuity: disabled`
 - 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
 
-这套配置对应当前正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此更适合作为结项阶段的主对照与稳妥默认。
+这套配置对应既有多任务 `LoRA` 主模型下的正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此在旧口径下更适合作为主对照与稳妥默认。
 
 ### 2. WT-only continuity 展示参考配置
 
@@ -208,7 +215,7 @@
 - `WT gate mask_blur_kernel = 3`
 - 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
 
-这套配置对应 `g4`。它在 fixed20 上表现为更稳健的 `WT gate` 收敛组，适合用于展示 `WT-only continuity` 机制本身；但在 `confirm_large_unseen` 上未能继续优于 baseline，因此更适合作为“机制展示参考组”，而不是结项阶段唯一默认配置。
+这套配置对应 `g4`。它在 fixed20 上表现为更稳健的 `WT gate` 收敛组，适合用于展示 `WT-only continuity` 机制本身；但在 `confirm_large_unseen` 上未能继续优于 baseline，因此在旧口径下更适合作为“机制展示参考组”，而不是唯一默认配置。
 
 ### 3. 高收益参考组
 

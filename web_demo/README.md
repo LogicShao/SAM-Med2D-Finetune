@@ -51,6 +51,15 @@ pip install fastapi uvicorn python-multipart
 pip install -r requirements.txt
 ```
 
+## 默认模型配置
+
+当前 Web demo 默认整病例推理主模型为：
+
+- checkpoint：`workdir_multi_task/models/finetune_no_stop_lora/lora_adapters`
+- `finetune_method`：`lora`
+
+之所以暂时继续保留这套配置，是为了与既有整病例回归结果和展示样例保持一致；后续可在补齐 `Adapter` 版正式回归后再统一切换默认 pipeline。
+
 ## 启动
 
 从仓库根目录执行：

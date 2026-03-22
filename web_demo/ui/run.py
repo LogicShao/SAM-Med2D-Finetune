@@ -40,7 +40,7 @@ def _build_job_status_payload(run_id: str) -> dict[str, object]:
 def run_page(request: Request) -> HTMLResponse:
     return _render_run_template(
         request,
-        title="上传运行",
+        title="病例处理",
         active_nav="run",
         page_mode="form",
         notice=None,
@@ -52,11 +52,11 @@ def run_wait_page(request: Request, run_id: str) -> HTMLResponse:
     try:
         payload = _build_job_status_payload(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"未找到运行任务: {run_id}") from exc
+        raise HTTPException(status_code=404, detail=f"未找到处理任务: {run_id}") from exc
 
     return _render_run_template(
         request,
-        title=f"运行中 - {run_id}",
+        title=f"处理中 - {run_id}",
         active_nav="run",
         page_mode="wait",
         run_id=run_id,
@@ -70,7 +70,7 @@ def run_status_api(run_id: str) -> JSONResponse:
     try:
         payload = _build_job_status_payload(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"未找到运行任务: {run_id}") from exc
+        raise HTTPException(status_code=404, detail=f"未找到处理任务: {run_id}") from exc
     return JSONResponse(payload)
 
 
@@ -87,7 +87,7 @@ def run_case(
     except Exception as exc:
         return _render_run_template(
             request,
-            title="上传运行",
+            title="病例处理",
             active_nav="run",
             page_mode="form",
             notice=build_notice(str(exc), tone="error"),

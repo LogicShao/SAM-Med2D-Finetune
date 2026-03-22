@@ -191,6 +191,7 @@ workdir_xxx/
 | --- | --- | --- | --- | --- |
 | 单任务 Adapter | 0.8335 | 0.7402 | 5 | `workdir_label_WT/logs/single_task_adapter/metrics.csv` |
 | 单任务 LoRA | 0.8113 | 0.6966 | 36 | `workdir_label_WT/logs/single_task_lora/metrics.csv` |
+| 多任务 Adapter | 0.7560 | 0.6619 | 24 | `workdir_multi_task/logs/finetune_adapter/metrics.csv` |
 | 多任务 LoRA | 0.7265 | 0.6215 | 66 | `workdir_multi_task/logs/finetune_no_stop_lora/metrics.csv` |
 | 原始基线 | 0.5303 | 0.3882 | - | `workdir_label_WT/baseline_metrics.json` |
 
@@ -198,7 +199,15 @@ workdir_xxx/
 
 - 单任务 Adapter 是当前日志里表现最好的配置，收敛也最快。
 - 单任务 LoRA 明显优于基线，但峰值略低于 Adapter。
-- 多任务 LoRA 的指标低于单任务结果，符合任务更复杂、输出类别更多的预期。
+- 多任务 Adapter 是当前多任务训练日志里表现最好的配置，优于多任务 LoRA。
+- 多任务 LoRA 的指标低于多任务 Adapter，说明继续把它作为默认 pipeline 主模型并不合理。
+
+当前推荐的整病例推理 / Web demo 默认主模型为：
+
+- checkpoint：`workdir_multi_task/models/finetune_adapter/best_model.pth`
+- `finetune_method`：`adapter`
+
+此前使用的 `workdir_multi_task/models/finetune_no_stop_lora/lora_adapters` 仅保留为历史回归实验配置，不再建议作为默认 pipeline。
 
 ## 8. 整病例推理与端到端进展
 

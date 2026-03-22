@@ -3,19 +3,19 @@
 {% block content %}
   {% if page_mode == "home" %}
     <section class="hero card hero-card">
-      <div class="eyebrow">Minimal Demo</div>
-      <h1>上传/选择病例，串行跑通自动分割、后处理和 3D 结果查看</h1>
-      <p class="lead">页面只保留系统主链路，不再展示训练曲线、复杂对比页、大段指标看板和无关操作按钮。</p>
+      <div class="eyebrow">辅助分析</div>
+      <h1>脑肿瘤 MRI 三维可视化与辅助分析</h1>
+      <p class="lead">支持病例导入、自动处理、三维可视化与结果查看。</p>
       <div class="hero-actions">
-        <a class="button primary" href="/samples">选择样例病例</a>
-        <a class="button secondary" href="/run">上传病例并运行</a>
+        <a class="button primary" href="/samples">选择病例</a>
+        <a class="button secondary" href="/run">导入病例并处理</a>
       </div>
-      <div class="hero-meta">当前已发现 {{ sample_count }} 个稳定样例，可直接查看结果，不重新计算。</div>
+      <div class="hero-meta">当前提供 {{ sample_count }} 例可查看病例，可直接进入结果页。</div>
     </section>
 
     <section class="card-grid two-column-grid">
       <article class="card">
-        <h2>主链路</h2>
+        <h2>处理流程</h2>
         <ol class="step-list">
           {% for step in steps %}
             <li>{{ step }}</li>
@@ -23,7 +23,7 @@
         </ol>
       </article>
       <article class="card">
-        <h2>当前约束</h2>
+        <h2>系统说明</h2>
         <ul class="bullet-list">
           {% for item in constraints %}
             <li>{{ item }}</li>
@@ -34,9 +34,9 @@
   {% else %}
     <section class="section-heading page-header">
       <div>
-        <div class="eyebrow">Sample Cases</div>
-        <h1>选择样例病例</h1>
-        <p>样例页面只读复用已有 outputs 结果，选中后直接进入结果页，不重新计算。</p>
+        <div class="eyebrow">病例列表</div>
+        <h1>选择病例</h1>
+        <p>可直接查看已完成处理的病例结果，包括三维可视化与关键切片。</p>
       </div>
       <a class="button ghost" href="/">返回首页</a>
     </section>
@@ -51,13 +51,13 @@
             </div>
             <h3>{{ case.case_id }}</h3>
             <p>{{ case.summary }}</p>
-            <span class="case-link">进入结果页</span>
+            <span class="case-link">查看结果</span>
           </a>
         {% endfor %}
       {% else %}
         <div class="empty-state">
-          <h2>未找到可直接回放的样例结果</h2>
-          <p>请先确认 outputs 中已有带 case_meta.json 和 3D HTML 预览的病例目录。</p>
+          <h2>暂无可查看病例</h2>
+          <p>请先确认 outputs 中已有包含病例信息和三维结果的病例目录。</p>
         </div>
       {% endif %}
     </section>

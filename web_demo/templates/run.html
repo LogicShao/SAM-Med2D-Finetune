@@ -4,9 +4,9 @@
   {% if page_mode == "form" %}
     <section class="section-heading page-header">
       <div>
-        <div class="eyebrow">Single Case Demo</div>
-        <h1>上传病例并运行</h1>
-        <p>当前仅支持单病例串行处理。页面会复用现有推理脚本、后处理逻辑和 3D HTML 生成脚本。</p>
+        <div class="eyebrow">病例处理</div>
+        <h1>导入病例并开始处理</h1>
+        <p>支持单病例导入、自动处理与结果查看。</p>
       </div>
       <a class="button ghost" href="/">返回首页</a>
     </section>
@@ -21,42 +21,42 @@
           <label class="field">
             <span>本机病例目录</span>
             <input type="text" name="case_dir" placeholder="例如：D:/proj/.../BraTS2021_00526">
-            <small>优先支持单病例目录，目录内应包含 t1 / t1ce / t2 / flair 四个模态。</small>
+            <small>优先支持单病例目录，目录内应包含 t1 / t1ce / t2 / flair 四个模态文件。</small>
           </label>
 
           <label class="field">
             <span>上传病例文件</span>
             <input type="file" name="files" multiple accept=".nii,.nii.gz">
-            <small>可直接上传单病例所需 NIfTI 文件，后端会先落盘，再进入串行处理流程。</small>
+            <small>可直接上传单病例所需 NIfTI 文件，系统会整理后进入处理流程。</small>
           </label>
 
           <label class="field">
             <span>上传病例目录</span>
             <input type="file" name="files" multiple webkitdirectory directory>
-            <small>兼容 Chromium 目录上传；当前仍按单病例串行 demo 执行。</small>
+            <small>兼容 Chromium 目录上传，系统将按步骤完成病例处理。</small>
           </label>
         </div>
 
         <div class="inline-note">
-          <strong>说明：</strong> 当前实现优先补齐可轮询的等待页、阶段状态与日志 tail，不引入 websocket、celery 或复杂队列。
+          <strong>说明：</strong> 系统将依次完成自动分割、结果处理与三维可视化生成，并实时更新处理状态。
         </div>
 
         <div class="hero-actions">
           <button class="button primary" id="run-submit" type="submit">开始处理</button>
-          <a class="button secondary" href="/samples">先看样例结果</a>
+          <a class="button secondary" href="/samples">查看病例列表</a>
         </div>
       </form>
     </section>
   {% else %}
     <section class="section-heading page-header">
       <div>
-        <div class="eyebrow">Pipeline Running</div>
+        <div class="eyebrow">处理进度</div>
         <h1>正在处理病例</h1>
-        <p>页面会定时轮询当前任务状态，并展示最近日志。任务完成后会自动提供结果入口。</p>
+        <p>页面会持续更新当前处理状态，并展示最近日志信息。处理完成后可直接查看结果。</p>
       </div>
       <div class="hero-actions">
-        <a class="button ghost" href="/run">返回上传页</a>
-        <a class="button secondary" href="/samples">查看样例</a>
+        <a class="button ghost" href="/run">返回处理页</a>
+        <a class="button secondary" href="/samples">查看病例列表</a>
       </div>
     </section>
 
@@ -70,19 +70,29 @@
       </div>
       <div class="job-meta-grid">
         <article class="metric-card job-meta-card">
-          <span>病例 ID</span>
+          <span>病例编号</span>
           <strong id="job-case-id">{{ initial_state.case_id }}</strong>
         </article>
         <article class="metric-card job-meta-card">
-          <span>Run ID</span>
+          <span>处理编号</span>
           <strong id="job-run-id">{{ initial_state.run_id }}</strong>
         </article>
         <article class="metric-card job-meta-card">
-          <span>来源</span>
-          <strong id="job-source-type">{{ initial_state.source_type }}</strong>
+          <span>导入方式</span>
+          <strong id="job-source-type">
+            {% if initial_state.source_type == "directory" %}
+              本机目录
+            {% elif initial_state.source_type == "uploaded_files" %}
+              上传文件
+            {% elif initial_state.source_type == "uploaded_directory" %}
+              上传目录
+            {% else %}
+              {{ initial_state.source_type }}
+            {% endif %}
+          </strong>
         </article>
         <article class="metric-card job-meta-card">
-          <span>结果目录</span>
+          <span>结果位置</span>
           <strong id="job-result-dir">{{ initial_state.result_dir }}</strong>
         </article>
       </div>
@@ -91,8 +101,8 @@
     <section class="card">
       <div class="section-heading compact">
         <div>
-          <h2>阶段状态</h2>
-          <p>当前为串行 demo，不展示百分比，只展示明确阶段切换。</p>
+          <h2>处理进度</h2>
+          <p>系统将按步骤完成图像处理与三维结果生成，并显示当前所处阶段。</p>
         </div>
       </div>
       <div class="job-stage-grid" id="job-stage-grid"></div>
@@ -101,14 +111,14 @@
     <section class="card">
       <div class="section-heading compact">
         <div>
-          <h2>后台日志</h2>
-          <p>展示最近 40 行日志，便于判断当前执行到哪一步。</p>
+          <h2>处理日志</h2>
+          <p>展示最近 40 行日志，用于查看当前处理进展。</p>
         </div>
       </div>
-      <pre class="job-log-panel" id="job-log-panel">等待日志输出...</pre>
+      <pre class="job-log-panel" id="job-log-panel">正在等待处理日志...</pre>
       <div class="hero-actions job-action-row">
         <a class="button primary" id="job-result-link" href="#" hidden>查看结果</a>
-        <span class="job-redirect-note" id="job-redirect-note" hidden>处理完成，正在跳转结果页...</span>
+        <span class="job-redirect-note" id="job-redirect-note" hidden>处理完成，正在打开结果页...</span>
       </div>
     </section>
 

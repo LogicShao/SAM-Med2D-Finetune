@@ -10,16 +10,16 @@ from web_demo.ui.common import build_page_context
 router = APIRouter()
 
 HOME_STEPS = (
-    "选择已有病例结果，或上传单病例目录/文件。",
-    "调用现有整病例推理脚本完成自动分割。",
-    "调用现有后处理和 3D 可视化逻辑生成结果目录。",
-    "在结果页查看病例信息、处理状态、3D 结果和 2D 切片。",
+    "选择已完成处理的病例，或导入单病例目录/文件。",
+    "系统完成自动分割处理。",
+    "系统生成处理结果与三维可视化内容。",
+    "在结果页查看病例信息、处理状态、三维结果与关键切片。",
 )
 
 HOME_CONSTRAINTS = (
-    "当前仅保证单病例串行 demo，不做任务队列、数据库和并发管理。",
-    "优先保证“选择样例病例 -> 查看结果”稳定可演示。",
-    "上传链路复用现有脚本，不额外改写算法流程。",
+    "当前支持单病例处理与结果查看。",
+    "可直接查看已完成处理的病例结果。",
+    "系统提供自动分割、结果处理与三维可视化。",
 )
 
 
@@ -49,7 +49,7 @@ def home_page(request: Request) -> HTMLResponse:
 def sample_cases_page(request: Request) -> HTMLResponse:
     return _render_home_template(
         request,
-        title="样例病例",
+        title="病例列表",
         active_nav="samples",
         page_mode="samples",
         sample_cases=list_sample_cases(),

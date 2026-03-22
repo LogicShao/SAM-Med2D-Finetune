@@ -400,6 +400,63 @@ a {
   gap: var(--space-8);
 }
 
+.analysis-grid,
+.analysis-meta-grid,
+.analysis-note-list {
+  display: grid;
+}
+
+.analysis-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-16);
+}
+
+.analysis-card {
+  background: #f7f4ee;
+}
+
+.analysis-card.emphasis {
+  background: linear-gradient(180deg, #eef7f3 0%, #ffffff 100%);
+  border: 1px solid rgba(31, 111, 95, 0.12);
+}
+
+.analysis-label,
+.analysis-meta {
+  color: var(--muted);
+}
+
+.analysis-label {
+  font-size: 0.84rem;
+}
+
+.analysis-value {
+  font-size: 1.28rem;
+  line-height: 1.3;
+}
+
+.analysis-meta {
+  font-size: 0.92rem;
+}
+
+.analysis-meta-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-16);
+}
+
+.analysis-meta-card strong {
+  line-height: 1.5;
+}
+
+.analysis-note-list {
+  gap: var(--space-12);
+}
+
+.analysis-note-list p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
 .metric-badge span {
   display: block;
   color: var(--muted);
@@ -512,6 +569,7 @@ a {
 .hero-card,
 .form-card,
 .info-card,
+.analysis-panel,
 .status-panel,
 .viewer-card,
 .slice-panel,
@@ -536,6 +594,7 @@ a {
 }
 
 .info-card,
+.analysis-panel,
 .status-panel,
 .slice-panel,
 .summary-panel {

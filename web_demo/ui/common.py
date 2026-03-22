@@ -9,11 +9,11 @@ from web_demo.config import APP_DESCRIPTION, APP_NAME
 
 NAV_ITEMS = (
     {"key": "home", "href": "/", "label": "首页"},
-    {"key": "samples", "href": "/samples", "label": "样例病例"},
-    {"key": "run", "href": "/run", "label": "上传运行"},
+    {"key": "samples", "href": "/samples", "label": "病例列表"},
+    {"key": "run", "href": "/run", "label": "病例处理"},
 )
 
-FOOTER_TEXT = "最小演示版仅保留单病例流程，不包含任务队列、数据库和科研看板。"
+FOOTER_TEXT = "本系统用于影像处理流程展示，结果仅供辅助分析参考。"
 
 
 def build_page_context(

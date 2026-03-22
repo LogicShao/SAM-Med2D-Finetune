@@ -28,6 +28,12 @@ COMBINED_MASK_COLORS = {
     4: np.array([230, 57, 70], dtype=np.uint8),
 }
 
+CLASS_MASK_CANDIDATES = {
+    "WT": ("post_WT.nii.gz", "WT.nii.gz"),
+    "TC": ("post_TC.nii.gz", "TC.nii.gz"),
+    "ET": ("post_ET.nii.gz", "ET.nii.gz"),
+}
+
 
 def encode_result_id(result_dir: Path) -> str:
     relative_path = result_dir.resolve().relative_to(OUTPUTS_DIR.resolve())
@@ -107,6 +113,21 @@ def _load_volume(path: Path | None) -> np.ndarray | None:
         return np.asarray(nib.load(str(path)).dataobj)
     except Exception:
         return None
+
+
+def _load_nifti_data_and_spacing(path: Path | None) -> tuple[np.ndarray | None, tuple[float, float, float] | None]:
+    if path is None or not path.is_file():
+        return None, None
+    try:
+        image = nib.load(str(path))
+        data = np.asarray(image.dataobj)
+        zooms = tuple(float(value) for value in image.header.get_zooms()[:3])
+    except Exception:
+        return None, None
+
+    if len(zooms) < 3 or any(value <= 0 for value in zooms[:3]):
+        return data, None
+    return data, (zooms[0], zooms[1], zooms[2])
 
 
 def _normalize_volume(volume: np.ndarray) -> np.ndarray:
@@ -212,6 +233,210 @@ def _format_float(value: Any) -> str | None:
         return None
 
 
+def _format_int(value: Any) -> str | None:
+    try:
+        return f"{int(value):,}"
+    except Exception:
+        return None
+
+
+def _normalize_spacing(spacing: Any) -> tuple[float, float, float] | None:
+    if not isinstance(spacing, (list, tuple)) or len(spacing) < 3:
+        return None
+    try:
+        normalized = tuple(float(spacing[index]) for index in range(3))
+    except Exception:
+        return None
+    if any(value <= 0 for value in normalized):
+        return None
+    return normalized
+
+
+def _format_spacing_text(spacing: tuple[float, float, float] | None) -> str:
+    if spacing is None:
+        return "暂不可用"
+    return " / ".join(f"{value:.3f}" for value in spacing) + " mm"
+
+
+def _find_first_existing_path(result_dir: Path, filenames: tuple[str, ...]) -> Path | None:
+    for filename in filenames:
+        candidate = result_dir / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_spacing_from_case_meta(case_meta: dict[str, Any] | None) -> tuple[float, float, float] | None:
+    return _normalize_spacing((case_meta or {}).get("voxel_spacing"))
+
+
+def _load_spacing_from_modality(case_meta: dict[str, Any] | None) -> tuple[float, float, float] | None:
+    modality_paths = ((case_meta or {}).get("modality_paths") or {})
+    for modality in ("flair", "t1ce", "t2", "t1"):
+        raw_path = modality_paths.get(modality)
+        data, spacing = _load_nifti_data_and_spacing(Path(raw_path)) if raw_path else (None, None)
+        if data is not None and spacing is not None:
+            return spacing
+    return None
+
+
+def _load_class_mask_volumes(result_dir: Path) -> tuple[dict[str, np.ndarray], tuple[float, float, float] | None, dict[str, str]]:
+    mask_volumes: dict[str, np.ndarray] = {}
+    spacing: tuple[float, float, float] | None = None
+    sources: dict[str, str] = {}
+
+    for class_name, filenames in CLASS_MASK_CANDIDATES.items():
+        path = _find_first_existing_path(result_dir, filenames)
+        data, current_spacing = _load_nifti_data_and_spacing(path)
+        if data is None:
+            continue
+        mask_volumes[class_name] = np.asarray(data) > 0
+        sources[class_name] = path.name if path is not None else ""
+        if spacing is None and current_spacing is not None:
+            spacing = current_spacing
+
+    return mask_volumes, spacing, sources
+
+
+def _load_combined_mask_volume(result_dir: Path) -> tuple[np.ndarray | None, tuple[float, float, float] | None, Path | None]:
+    path = _find_first_existing_path(result_dir, ("post_combined_label.nii.gz", "combined_label.nii.gz"))
+    data, spacing = _load_nifti_data_and_spacing(path)
+    if data is None:
+        return None, None, None
+    return np.asarray(data), spacing, path
+
+
+def _build_quantitative_analysis(result_dir: Path, case_meta: dict[str, Any] | None) -> dict[str, Any]:
+    analysis: dict[str, Any] = {
+        "available": False,
+        "volume_unit": "ml",
+        "wt_volume_ml": None,
+        "tc_volume_ml": None,
+        "et_volume_ml": None,
+        "total_tumor_volume_ml": None,
+        "wt_voxels": None,
+        "tc_voxels": None,
+        "et_voxels": None,
+        "total_tumor_voxels": None,
+        "spacing": None,
+        "spacing_text": "暂不可用",
+        "notes": [],
+        "primary_note": "当前病例缺少可用于计算的分割结果或体素间距信息。",
+        "display_cards": [],
+    }
+
+    mask_volumes, mask_spacing, mask_sources = _load_class_mask_volumes(result_dir)
+    combined_volume, combined_spacing, combined_path = _load_combined_mask_volume(result_dir)
+
+    if combined_volume is not None:
+        combined_masks = {
+            "WT": combined_volume > 0,
+            "TC": np.isin(combined_volume, (1, 4)),
+            "ET": combined_volume == 4,
+        }
+        for class_name, mask in combined_masks.items():
+            if class_name not in mask_volumes:
+                mask_volumes[class_name] = mask
+                if combined_path is not None:
+                    mask_sources[class_name] = combined_path.name
+
+    spacing = (
+        _load_spacing_from_case_meta(case_meta)
+        or mask_spacing
+        or combined_spacing
+        or _load_spacing_from_modality(case_meta)
+    )
+    analysis["spacing"] = list(spacing) if spacing is not None else None
+    analysis["spacing_text"] = _format_spacing_text(spacing)
+
+    if spacing is None:
+        analysis["notes"].append("缺少体素间距信息，暂无法完成体积计算。")
+    if not mask_volumes:
+        analysis["notes"].append("当前病例缺少可用于定量分析的分割结果。")
+
+    missing_classes = [class_name for class_name in ("WT", "TC", "ET") if class_name not in mask_volumes]
+    if missing_classes:
+        analysis["notes"].append(f"部分分区结果暂不可用：{' / '.join(missing_classes)}。")
+
+    if combined_volume is not None and any(source.endswith("combined_label.nii.gz") for source in mask_sources.values()):
+        analysis["notes"].append("部分定量结果基于当前合并分割结果推算。")
+
+    if spacing is None or "WT" not in mask_volumes:
+        if analysis["notes"]:
+            analysis["primary_note"] = analysis["notes"][0]
+        return analysis
+
+    voxel_volume_mm3 = spacing[0] * spacing[1] * spacing[2]
+    voxel_counts: dict[str, int | None] = {}
+    for class_name in ("WT", "TC", "ET"):
+        mask = mask_volumes.get(class_name)
+        voxel_counts[class_name] = int(np.count_nonzero(mask)) if mask is not None else None
+
+    total_tumor_voxels = voxel_counts["WT"]
+    volume_map = {
+        "WT": (voxel_counts["WT"] * voxel_volume_mm3 / 1000.0) if voxel_counts["WT"] is not None else None,
+        "TC": (voxel_counts["TC"] * voxel_volume_mm3 / 1000.0) if voxel_counts["TC"] is not None else None,
+        "ET": (voxel_counts["ET"] * voxel_volume_mm3 / 1000.0) if voxel_counts["ET"] is not None else None,
+        "TOTAL": (total_tumor_voxels * voxel_volume_mm3 / 1000.0) if total_tumor_voxels is not None else None,
+    }
+
+    analysis.update(
+        {
+            "available": True,
+            "wt_volume_ml": volume_map["WT"],
+            "tc_volume_ml": volume_map["TC"],
+            "et_volume_ml": volume_map["ET"],
+            "total_tumor_volume_ml": volume_map["TOTAL"],
+            "wt_voxels": voxel_counts["WT"],
+            "tc_voxels": voxel_counts["TC"],
+            "et_voxels": voxel_counts["ET"],
+            "total_tumor_voxels": total_tumor_voxels,
+            "primary_note": "三维定量结果基于当前分割结果自动计算。",
+        }
+    )
+
+    analysis["display_cards"] = [
+        {
+            "key": "total",
+            "label": "总肿瘤体积",
+            "volume_text": (f"{volume_map['TOTAL']:.3f} ml" if volume_map["TOTAL"] is not None else "暂不可用"),
+            "voxels_text": (
+                f"{_format_int(total_tumor_voxels)} 体素" if total_tumor_voxels is not None else "体素数暂不可用"
+            ),
+            "emphasis": True,
+        },
+        {
+            "key": "wt",
+            "label": "WT 体积",
+            "volume_text": (f"{volume_map['WT']:.3f} ml" if volume_map["WT"] is not None else "暂不可用"),
+            "voxels_text": (
+                f"{_format_int(voxel_counts['WT'])} 体素" if voxel_counts["WT"] is not None else "体素数暂不可用"
+            ),
+            "emphasis": False,
+        },
+        {
+            "key": "tc",
+            "label": "TC 体积",
+            "volume_text": (f"{volume_map['TC']:.3f} ml" if volume_map["TC"] is not None else "暂不可用"),
+            "voxels_text": (
+                f"{_format_int(voxel_counts['TC'])} 体素" if voxel_counts["TC"] is not None else "体素数暂不可用"
+            ),
+            "emphasis": False,
+        },
+        {
+            "key": "et",
+            "label": "ET 体积",
+            "volume_text": (f"{volume_map['ET']:.3f} ml" if volume_map["ET"] is not None else "暂不可用"),
+            "voxels_text": (
+                f"{_format_int(voxel_counts['ET'])} 体素" if voxel_counts["ET"] is not None else "体素数暂不可用"
+            ),
+            "emphasis": False,
+        },
+    ]
+
+    return analysis
+
+
 def _extract_case_metrics(summary_metrics: dict[str, Any] | None, case_id: str) -> dict[str, Any] | None:
     if not summary_metrics:
         return None
@@ -231,22 +456,9 @@ def _build_summary_lines(
     lines: list[str] = []
     if pipeline_summary:
         if pipeline_summary.get("status") == "completed":
-            lines.append("该病例已按单病例串行 demo 流程完成自动分割、后处理和 3D 结果生成。")
+            lines.append("该病例已完成自动处理，可查看分割结果、三维模型与关键切片。")
         elif pipeline_summary.get("status") == "failed":
-            lines.append("该病例运行中断，当前页面只展示已经成功生成的中间结果。")
-
-    if case_metrics and case_metrics.get("post"):
-        post_mean_dice = _format_float((case_metrics.get("post") or {}).get("mean_dice"))
-        wt_dice = _format_float((((case_metrics.get("post") or {}).get("per_class") or {}).get("WT") or {}).get("dice"))
-        if post_mean_dice:
-            metric_line = f"已有汇总记录显示该病例后处理后的 mean Dice 为 {post_mean_dice}"
-            if wt_dice:
-                metric_line += f"，WT Dice 为 {wt_dice}"
-            lines.append(metric_line + "。")
-
-    if case_meta and (case_meta.get("prompt_mode") or case_meta.get("finetune_method")):
-        config_bits = [bit for bit in (case_meta.get("prompt_mode"), case_meta.get("finetune_method")) if bit]
-        lines.append(f"当前结果来自 {' / '.join(config_bits)} 配置下的整病例分割输出。")
+            lines.append("该病例处理未完成，当前页面展示已生成的结果内容。")
 
     if postprocess_report:
         class_report = postprocess_report.get("classes", {})
@@ -254,10 +466,7 @@ def _build_summary_lines(
         tc_after = ((class_report.get("TC") or {}).get("after_hierarchy"))
         et_after = ((class_report.get("ET") or {}).get("after_hierarchy"))
         if any(value is not None for value in (et_after, tc_after, wt_after)):
-            lines.append(
-                "后处理结果已落盘，"
-                f"ET/TC/WT 的最终体素数分别为 {et_after or 0} / {tc_after or 0} / {wt_after or 0}。"
-            )
+            lines.append("后处理已完成，可继续查看更新后的分割结果与三维模型。")
 
     if not lines and summary_markdown:
         extracted = []
@@ -273,8 +482,39 @@ def _build_summary_lines(
         lines.extend(extracted)
 
     if not lines:
-        lines.append("当前页面只保留病例信息、处理状态、3D 预览和 2D 切片，不展示科研看板。")
+        lines.append("页面展示病例信息、处理状态、三维结果与关键切片。")
     return lines[:3]
+
+
+def _normalize_status_detail(detail: Any) -> str:
+    text = str(detail or "").strip()
+    if not text:
+        return "等待处理"
+
+    replacements = (
+        ("正在调用 infer_volume.py", "正在进行自动分割"),
+        ("正在执行 infer_volume.py", "正在进行自动分割"),
+        ("正在执行自动分割脚本 infer_volume.py", "正在进行自动分割"),
+        ("已生成 ET / TC / WT / combined_label", "分割结果已生成"),
+        ("缺少原始分割结果", "暂未生成分割结果"),
+        ("正在生成 post_* 结果", "正在进行结果处理"),
+        ("已生成 post_* 结果", "后处理完成"),
+        ("已完成 3D 后处理与层级约束", "后处理完成"),
+        ("已完成后处理并生成 post_* 结果", "后处理完成"),
+        ("后处理完成，已生成 post_* 结果", "后处理完成，结果已更新"),
+        ("HTML 预览已生成", "三维结果已生成"),
+        ("3D HTML 结果已生成", "三维模型已生成"),
+        ("HTML 预览已就绪", "三维结果可查看"),
+        ("未找到 3D HTML 预览", "暂未生成三维结果"),
+        ("正在调用 visualize_case.py", "正在生成三维结果"),
+        ("正在执行 visualize_case.py", "正在生成三维结果"),
+        ("正在执行 3D 重建与可视化", "正在生成三维结果"),
+        ("3D HTML 预览未生成成功。", "三维结果未生成成功。"),
+        ("3D HTML 结果已生成", "三维模型已生成"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
 
 
 def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | None) -> list[dict[str, str]]:
@@ -283,7 +523,7 @@ def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | Non
             {
                 "label": str(step.get("name", "未命名步骤")),
                 "state": str(step.get("status", "pending")),
-                "detail": str(step.get("detail", "") or "等待执行"),
+                "detail": _normalize_status_detail(step.get("detail", "")),
             }
             for step in pipeline_summary["steps"]
         ]
@@ -295,17 +535,17 @@ def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | Non
         {
             "label": "自动分割",
             "state": "done" if raw_ready else "missing",
-            "detail": "已生成 ET / TC / WT / combined_label" if raw_ready else "缺少原始分割结果",
+            "detail": "分割结果已生成" if raw_ready else "暂未生成分割结果",
         },
         {
             "label": "后处理",
             "state": "done" if post_ready else "partial",
-            "detail": "已生成 post_* 结果" if post_ready else "未找到完整后处理产物",
+            "detail": "后处理完成" if post_ready else "后处理结果不完整",
         },
         {
             "label": "3D 重建",
             "state": "done" if viewer_ready else "missing",
-            "detail": "HTML 预览已就绪" if viewer_ready else "未找到 3D HTML 预览",
+            "detail": "三维结果可查看" if viewer_ready else "暂未生成三维结果",
         },
     ]
 
@@ -322,35 +562,18 @@ def load_result_view(result_id: str) -> dict[str, Any]:
     case_metrics = _extract_case_metrics(summary_metrics, case_id)
     viewer_file = find_viewer_file(result_dir)
     slice_images = _generate_slice_gallery(result_dir, result_id, case_meta)
+    analysis = _build_quantitative_analysis(result_dir, case_meta)
 
     case_info = [
         {"label": "病例编号", "value": str(case_id)},
-        {"label": "结果目录", "value": str(result_dir.resolve())},
+        {"label": "结果位置", "value": str(result_dir.resolve())},
     ]
     if case_meta and case_meta.get("shape"):
         case_info.append({"label": "体素尺寸", "value": " x ".join(str(item) for item in case_meta["shape"])})
     if case_meta and case_meta.get("voxel_spacing"):
         spacing = " / ".join(str(item) for item in case_meta["voxel_spacing"]) + " mm"
         case_info.append({"label": "体素间距", "value": spacing})
-    if case_meta and case_meta.get("prompt_mode"):
-        case_info.append(
-            {
-                "label": "分割配置",
-                "value": f"{case_meta.get('prompt_mode')} / {case_meta.get('finetune_method', '-')}",
-            }
-        )
-
     metric_badges = []
-    if case_metrics and case_metrics.get("post"):
-        metric_badges.append(
-            {"label": "Post Mean Dice", "value": _format_float((case_metrics.get("post") or {}).get("mean_dice")) or "-"}
-        )
-        metric_badges.append(
-            {
-                "label": "WT Dice",
-                "value": _format_float((((case_metrics.get("post") or {}).get("per_class") or {}).get("WT") or {}).get("dice")) or "-",
-            }
-        )
 
     return {
         "result_id": result_id,
@@ -366,9 +589,10 @@ def load_result_view(result_id: str) -> dict[str, Any]:
             postprocess_report=postprocess_report,
             summary_markdown=summary_markdown,
         ),
+        "analysis": analysis,
         "slice_images": slice_images,
         "metric_badges": metric_badges,
-        "note": "页面只保留病例信息、处理状态、3D 结果和 2D 切片，默认不展开科研看板。",
+        "note": "页面展示病例信息、处理状态、三维结果与关键切片。",
     }
 
 
@@ -376,5 +600,5 @@ def get_viewer_file_for_result(result_id: str) -> Path:
     result_dir = decode_result_id(result_id)
     viewer_file = find_viewer_file(result_dir)
     if viewer_file is None:
-        raise FileNotFoundError(f"未找到 3D HTML 预览: {result_dir}")
+        raise FileNotFoundError(f"未找到可显示的三维结果: {result_dir}")
     return viewer_file

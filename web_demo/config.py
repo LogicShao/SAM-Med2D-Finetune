@@ -15,22 +15,22 @@ DEMO_RUNS_DIR = OUTPUTS_DIR / "web_demo_runs"
 UPLOAD_STAGE_DIR = DEMO_RUNS_DIR / "uploads"
 GENERATED_IMAGE_DIR = STATIC_DIR / "generated"
 
-APP_NAME = "SAM-Med2D 脑肿瘤最小演示版"
-APP_DESCRIPTION = "只保留单条主链路：上传或选择病例，自动分割，3D 重建，结果查看。"
+APP_NAME = "脑肿瘤 MRI 三维可视化辅助分析平台"
+APP_DESCRIPTION = "支持病例导入、自动处理与结果查看。"
 APP_HOST = os.getenv("WEB_DEMO_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("WEB_DEMO_PORT", "7860"))
 PYTHON_EXECUTABLE = Path(os.getenv("WEB_DEMO_PYTHON", sys.executable)).resolve()
 
 SAMPLE_CASE_COLLECTIONS = (
     {
-        "label": "现成演示样例",
-        "tag": "四病例闭环",
+        "label": "病例结果",
+        "tag": "常规病例",
         "root": OUTPUTS_DIR / "postprocess_yolo_box_4cases",
         "max_cases": 4,
     },
     {
-        "label": "困难病例样例",
-        "tag": "困难病例",
+        "label": "病例结果",
+        "tag": "复杂病例",
         "root": OUTPUTS_DIR / "stage2_hard8_top1",
         "max_cases": 2,
     },
