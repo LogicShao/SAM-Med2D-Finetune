@@ -1,20 +1,64 @@
 ﻿# SAM-Med2D Finetune for BraTS 2021
 
-本仓库用于将 `SAM-Med2D` 微调到 `BraTS 2021` 脑肿瘤分割任务，支持两条工作流：
+本仓库围绕 `BraTS 2021` 脑肿瘤分割任务，对 `SAM-Med2D` 做微调、整病例推理、3D 后处理与结果展示，当前已经形成一条完整可复用的链路：
+
+```text
+训练 / 评估 -> 整病例自动分割 -> 3D 后处理 -> 3D 可视化 -> Web 结果查看
+```
+
+仓库支持两条主要工作流：
 
 - 单任务路径：先把原始 BraTS `NIfTI` 数据预处理为 `PNG + JSON`，再用 `train_singletask.py` 训练。
 - 多任务路径：直接读取原始 BraTS 病例目录，使用 4 模态输入，预测 `ET / TC / WT`。
 
-当前实现支持 `Adapter` 和 `LoRA` 两种微调方式，并输出日志、模型和训练曲线。
+当前实现支持 `Adapter` 和 `LoRA` 两种微调方式，并输出日志、模型、训练曲线与整病例级结果。
 
-除训练与评估外，仓库当前还包含：
+除训练与评估外，仓库还包含：
 
 - 整病例自动推理入口 `infer_volume.py`
 - 3D 后处理与结果整理 `postprocess_3d.py`
 - 3D 可视化页面生成 `visualize_case.py`
 - 面向演示与结果查看的 `web_demo/`
+- 面向结项整理的 `report/` 与 `outputs/` 正式汇总结果
 
 如果你只想快速查看现成病例结果，建议直接启动 `web_demo`；如果你要复现实验或替换模型，再使用训练与整病例推理脚本。
+
+## 0. 结项概览
+
+当前项目在结果口径上已经收敛为两种模式：
+
+- `standard` 标准模式：对应 `Adapter baseline`，强调整体病灶范围分析，只关注 `WT` 与总体肿瘤信息。
+- `multiclass` 多类别分析模式：对应 `Adapter + class_boxes_points + current default ET`，用于观察 `WT / TC / ET` 的区域分布和分类体积。
+
+当前可直接作为结项材料引用的结论如下：
+
+1. `Adapter baseline` 是当前正式默认基线。
+   - `fixed20`: `post Mean Dice = 0.528955`
+   - `confirm_large_unseen`: `post Mean Dice = 0.546043`
+2. `Adapter g4` 在机制上仍成立，但角色是“机制验证增强组”，不是默认入口。
+   - `fixed20`: 相对 `Adapter baseline` 提升 `+0.007169`
+   - `confirm_large_unseen`: 相对 `Adapter baseline` 提升 `+0.001433`
+3. 多类别 prompt 主路线已经建立。
+   - `fixed20` 上，`Adapter + class_boxes_points` 相对 `Adapter baseline` 的 `post Mean Dice` 提升 `+0.018896`
+   - `confirm_large_unseen` 上，相对 `Adapter baseline` 提升 `+0.006567`
+4. ET-only 小范围调参没有找到优于当前 `default ET` 的新版本。
+   - `recommended_variant = null`
+   - `should_advance_to_confirm_large_unseen = false`
+5. 历史 `LoRA` 大样本结果继续保留为对照资料，但不再作为当前默认 pipeline 的依据。
+
+## 0.1 重要文档与正式实验索引
+
+结项材料不要直接引用零散病例目录，优先引用下面这些主文档和汇总文件。
+
+| 类型 | 说明 | 主文档 | 对应结果文件 |
+| --- | --- | --- | --- |
+| 总览入口 | 项目概况、目录、命令、正式实验索引 | [`README.md`](README.md) | - |
+| 项目总报告 | 结项叙事、阶段性结论、系统口径说明 | [`report/report.md`](report/report.md) | - |
+| 默认基线验证 | `Adapter baseline / g4` 在 `fixed20` 与 `confirm_large_unseen` 上的正式验证 | [`report/adapter_verification.md`](report/adapter_verification.md) | [`outputs/stage7_adapter_verification/summary/adapter_comparison.md`](outputs/stage7_adapter_verification/summary/adapter_comparison.md), [`outputs/stage7_adapter_verification/summary/final_recommendation.md`](outputs/stage7_adapter_verification/summary/final_recommendation.md) |
+| 历史大样本确认 | 历史 `LoRA baseline / g4` 在 `confirm_large_unseen` 上的正式确认结果 | [`report/confirm_large_unseen_confirmation.md`](report/confirm_large_unseen_confirmation.md) | [`outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json`](outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json) |
+| 多类别 prompt 正式结果 | `class_boxes_points` 在 `fixed20` 与 `confirm_large_unseen` 上的正式汇总 | 本 README 第 7.3 节 | [`outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md), [`outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md) |
+| ET 调参结论 | ET-only 小范围调参、冻结默认 ET 配置 | [`report/et_prompt_tuning_report.md`](report/et_prompt_tuning_report.md) | [`outputs/stage9_et_prompt_tuning/et_prompt_tuning.md`](outputs/stage9_et_prompt_tuning/et_prompt_tuning.md), [`outputs/stage9_et_prompt_tuning/recommended_et_variant.md`](outputs/stage9_et_prompt_tuning/recommended_et_variant.md) |
+| Demo 使用说明 | `web_demo` 的结构、启动方式与展示链路 | [`web_demo/README.md`](web_demo/README.md) | `outputs/web_demo_runs/` |
 
 ## 1. 仓库结构
 
@@ -84,6 +128,16 @@ http://127.0.0.1:7860
 - `prompt_mode=yolo_box`
 - `prompt_box_strategy=top1`
 - YOLO checkpoint：`workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.pt`
+
+当前展示口径同步为：
+
+- 标准模式：`Adapter baseline`
+- 多类别分析模式：`Adapter + class_boxes_points + current default ET`
+
+当前样例结果目录为：
+
+- 标准模式样例：`outputs/stage7_adapter_verification/fixed20_adapter_baseline/`
+- 多类别分析样例：`outputs/stage9_et_prompt_tuning/fixed20_adapter_class_boxes_points_et_default/`
 
 ## 3. 数据准备
 
@@ -225,9 +279,11 @@ workdir_xxx/
   - 多任务 Adapter：`best_model.pth`
   - 多任务 LoRA：`lora_adapters/`
 
-## 7. 训练结果
+## 7. 正式实验与当前结论
 
-以下结果来自当前仓库已有日志，便于快速对比不同配置的实际效果。
+### 7.1 训练阶段结果
+
+以下结果来自当前仓库已有训练日志，便于快速对比不同配置的实际效果。
 
 | 配置 | 最佳验证 Dice | 最佳验证 IoU | 最佳 epoch | 日志位置 |
 | --- | --- | --- | --- | --- |
@@ -240,138 +296,119 @@ workdir_xxx/
 结论：
 
 - 单任务 Adapter 是当前日志里表现最好的配置，收敛也最快。
-- 单任务 LoRA 明显优于基线，但峰值略低于 Adapter。
-- 多任务 Adapter 是当前多任务训练日志里表现最好的配置，优于多任务 LoRA。
-- 多任务 LoRA 的指标低于多任务 Adapter，说明继续把它作为默认 pipeline 主模型并不合理。
+- 多任务 Adapter 明显优于多任务 LoRA，因此当前整病例默认主模型应以 Adapter 为准。
 
-当前代码中的整病例推理 / Web demo 默认主模型为：
+当前代码中的整病例推理 / `web_demo` 默认主模型为：
 
 - checkpoint：`workdir_multi_task/models/finetune_adapter/best_model.pth`
 - `finetune_method`：`adapter`
 
-此前使用的 `workdir_multi_task/models/finetune_no_stop_lora/lora_adapters` 仅保留为历史回归实验配置，不再建议作为默认 pipeline。若要切换默认模型，请直接修改 `web_demo/config.py`。
+### 7.2 Stage 7: Adapter 默认基线验证
 
-## 8. 整病例推理与端到端进展
+这是当前“标准模式默认口径”最关键的一组正式实验。
+
+| 数据集 | 配置 | post Mean Dice | ET | TC | WT | 主要结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fixed20` | Adapter baseline | 0.528955 | 0.374207 | 0.512041 | 0.700616 | 当前标准模式正式基线 |
+| `fixed20` | Adapter g4 | 0.536124 | 0.374207 | 0.512041 | 0.722123 | 相对 baseline `+0.007169`，但定位为机制增强组 |
+| `confirm_large_unseen` | Adapter baseline | 0.546043 | 0.434018 | 0.556753 | 0.647360 | 当前大样本默认基线 |
+| `confirm_large_unseen` | Adapter g4 | 0.547477 | 0.434018 | 0.556753 | 0.651660 | 相对 baseline `+0.001433`，继续保留但不升级为唯一默认 |
+
+对应文档：
+
+- [`report/adapter_verification.md`](report/adapter_verification.md)
+- [`outputs/stage7_adapter_verification/summary/adapter_comparison.md`](outputs/stage7_adapter_verification/summary/adapter_comparison.md)
+- [`outputs/stage7_adapter_verification/summary/final_recommendation.md`](outputs/stage7_adapter_verification/summary/final_recommendation.md)
+
+### 7.3 Stage 8: 多类别 prompt 正式结果
+
+这组实验决定了当前 `multiclass` 模式的正式口径。
+
+| 数据集 | 配置 | post Mean Dice | ET | TC | WT | 备注 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fixed20` | Adapter baseline | 0.528955 | 0.374207 | 0.512041 | 0.700616 | raw 阶段 `WT = TC = ET` 为 `20/20` |
+| `fixed20` | Adapter + class_boxes_points | 0.547851 | 0.404318 | 0.537971 | 0.701264 | 相对 baseline `+0.018896`，raw 三类塌缩降到 `0/20` |
+| `confirm_large_unseen` | Adapter baseline | 0.546043 | 0.434018 | 0.556753 | 0.647360 | 当前标准模式基线 |
+| `confirm_large_unseen` | Adapter + class_boxes_points | 0.552610 | 0.420123 | 0.587752 | 0.649955 | 相对 baseline `+0.006567`，TC/WT 提升，ET 仍有优化空间 |
+
+结论：
+
+- `class_boxes_points` 已经建立起可用的多类别 prompt 主路线。
+- 多类别模式不再依赖历史三类相同掩码结果。
+- 当前 `multiclass` 模式应读取 `stage8/9` 这条结果链，而不是复用标准模式结果。
+
+对应结果文件：
+
+- [`outputs/stage8_class_prompt_ablation/fixed20_adapter_baseline/summary.md`](outputs/stage8_class_prompt_ablation/fixed20_adapter_baseline/summary.md)
+- [`outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md)
+- [`outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md)
+
+### 7.4 Stage 9: ET Prompt 调参结论
+
+Stage 9 只围绕 `ET` 提示做低风险小范围收敛实验，不改 `WT/TC` 主逻辑。
+
+| 变体 | post Mean Dice | ET Dice | 结论 |
+| --- | --- | --- | --- |
+| `default` | 0.547851 | 0.404318 | 当前默认 ET 配置 |
+| `q92_pad4_p2_n2` | 0.547799 | 0.401877 | 最接近默认，但仍未超过默认 |
+| `q95_pad8_p1_n2_widefb` | 0.545067 | 0.402407 | fallback 过多，raw 层级稳定性下降 |
+| `q95_pad4_p1_n2` | 0.532104 | 0.347318 | ET 明显退化 |
+| `q90_pad2_p1_n0` | 0.527140 | 0.341197 | 去掉负点后退化更明显 |
+
+结论：
+
+- 本轮没有找到优于 `default` 的 ET-only 版本。
+- `recommended_variant = null`
+- `should_advance_to_confirm_large_unseen = false`
+- 当前多类别分析模式继续采用 `fixed20_adapter_class_boxes_points_et_default`
+
+对应文档：
+
+- [`report/et_prompt_tuning_report.md`](report/et_prompt_tuning_report.md)
+- [`outputs/stage9_et_prompt_tuning/et_prompt_tuning.md`](outputs/stage9_et_prompt_tuning/et_prompt_tuning.md)
+- [`outputs/stage9_et_prompt_tuning/recommended_et_variant.md`](outputs/stage9_et_prompt_tuning/recommended_et_variant.md)
+
+### 7.5 Stage 6: 历史 confirm_large_unseen 对照
+
+这组结果仍然有参考价值，但只应当作为历史对照，不应覆盖当前 Adapter 默认口径。
+
+| 数据集 | 配置 | post Mean Dice | WT | 结论 |
+| --- | --- | --- | --- | --- |
+| `confirm_large_unseen` | LoRA baseline | 0.536181 | 0.620401 | 历史主对照 |
+| `confirm_large_unseen` | LoRA g4 | 0.535515 | 0.618403 | 相对 baseline `-0.000666`，不支持升级为默认 |
+
+对应文档：
+
+- [`report/confirm_large_unseen_confirmation.md`](report/confirm_large_unseen_confirmation.md)
+- [`outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json`](outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json)
+
+## 8. 整病例推理、展示与结项口径
 
 当前仓库已经不再停留在“只会训练”的阶段，而是完成了从原始 BraTS 病例到 3D `NIfTI` 输出、后处理和可视化预览的闭环：
 
-- 已新增整病例推理入口 `infer_volume.py`，支持对单个 BraTS 病例输出 `ET.nii.gz`、`TC.nii.gz`、`WT.nii.gz`、`combined_label.nii.gz`。
-- 已新增 3D 后处理模块 `postprocess_3d.py`，支持闭运算、开运算、空洞填充、连通域筛选、Z 轴平滑以及 `ET ⊆ TC ⊆ WT` 层级约束。
-- 已新增 `visualize_case.py`，可生成 Raw / Post 对比的 3D HTML 预览。
+- 已实现整病例推理入口 `infer_volume.py`，可输出 `ET.nii.gz`、`TC.nii.gz`、`WT.nii.gz`、`combined_label.nii.gz`
+- 已实现 `postprocess_3d.py`，支持闭运算、开运算、空洞填充、连通域筛选、Z 轴平滑以及 `ET ⊆ TC ⊆ WT` 层级约束
+- 已实现 `visualize_case.py`，可生成 Raw / Post 对比的 3D HTML 预览
+- 已实现 `web_demo`，可做病例浏览、模式切换、3D 查看与关键切片查看
 
-### 8.1 Upper Bound 提示基线
+当前 `web_demo` 结果页重点展示：
 
-在 4 个固定验证病例上，使用真值紧致框作为 prompt 的 `upper_bound` 模式，并配合强后处理，得到：
+- 病例信息与处理状态
+- 3D HTML 结果
+- 2D 关键切片与叠加图
+- 基于现有分割结果与 spacing 的定量分析
 
-| 设置 | Mean Dice | Mean IoU | 说明 |
-| --- | --- | --- | --- |
-| `full_image_box` + 后处理 | 0.1807 | 0.1026 | 大量健康层假阳性 |
-| `upper_bound` + 后处理 | 0.6787 | 0.5370 | 证明模型本体具备可用上限 |
-
-这说明当前多任务 SAM-Med2D 的主要瓶颈并不完全在分割头，而在提示质量。
-
-### 8.2 YOLO 检测与端到端闭环
-
-仓库现已支持将 BraTS 原始病例切片转换为 YOLO 数据集，并训练检测器为 SAM 提供自动 bbox prompt。当前 YOLO 数据集与模型是单类检测设置，类别只有 `Tumor`，用于回答“当前切片是否存在肿瘤、肿瘤大致位于哪里”，并不直接区分 `WT / TC / ET`。当前最优候选检测器为 `workdir_yolo/brats_yolo_dev_img320_v8m`：
-
-- `img320_v8m` 在 Dev 集上达到 `mAP50 = 0.8415`、`mAP50-95 = 0.6312`、`recall = 0.7778`
-- 阈值扫描表明 `conf = 0.05` 时 `slice_recall_any_box = 0.9367`，适合作为“宁可多给框，也尽量不漏层”的工作点
-
-基于该 YOLO 模型，`yolo_box -> SAM -> 3D postprocess` 的 4 病例端到端验证结果为：
-
-| 配置 | Raw Mean Dice | Post Mean Dice | Raw Mean IoU | Post Mean IoU |
-| --- | --- | --- | --- | --- |
-| `yolo_box` + 强后处理 | 0.5106 | 0.5431 | 0.3616 | 0.3984 |
-
-### 8.3 阶段一结论：YOLO 工作点扩展验证
-
-为避免基于 4 病例样本过早下结论，额外在 `data_brats_raw/val` 的固定 20 病例子集上做了阶段一扩展验证，并从基线结果中冻结了 8 个困难病例。
-
-先在 YOLO 切片级召回上扫描 `conf ∈ {0.03, 0.05, 0.08, 0.10, 0.15}`、`iou ∈ {0.50, 0.60, 0.70}`。检测层最激进的候选是 `conf=0.03`，其 `slice_recall_any_box` 更高，但在端到端验证中没有转化为稳定收益。
-
-20 病例端到端结果如下：
-
-| 配置 | Post Mean Dice | Post Dice ET | Post Dice TC | Post Dice WT |
-| --- | --- | --- | --- | --- |
-| `conf=0.05, iou=0.60` | 0.5240 | 0.3729 | 0.5154 | 0.6839 |
-| `conf=0.03, iou=0.60` | 0.5236 | 0.3699 | 0.5137 | 0.6874 |
-
-冻结的 8 个困难病例上，`conf=0.03, iou=0.60` 的 `post Mean Dice` 仅从 `0.3653` 提升到 `0.3656`，增幅极小，且多数病例并未明显改善。
-
-结论：
-
-- 当前阶段一不支持将默认工作点从 `conf=0.05, iou=0.60` 切换到更激进的 detector 阈值。
-- 降低 `conf` 可以提升切片级召回，但在当前 `top-1 bbox` prompt 流程下，没有带来稳定的端到端收益。
-- 因此更合理的下一步不是继续深挖 detector 阈值，而是进入第二阶段，验证 `top-1` 与 `top-2 + 规则过滤` 的 prompt 策略差异。
-
-### 8.4 阶段二结论：Prompt 策略验证
-
-在固定 detector 工作点 `conf=0.05, iou=0.60` 下，围绕 `top-1 bbox` 是否过窄，补做了第二阶段 prompt 策略实验。当前实现已支持：
-
-- 全类别共享 `top1`
-- 全类别共享 `top2_merge`
-- 类别混合策略，例如 `ET/TC=top1, WT=top2_merge`
-
-其中 `top2_merge` 的规则为：
-
-- `score2 >= 0.5 * score1`
-- `0.1 * area1 <= area2 <= 2.0 * area1`
-- `IoU(box1, box2) < 0.9`
-
-在冻结的 8 个困难病例上，全类别 `top2_merge` 并非无效操作，而是实际触发了 `85` 个 slice 的双框合并；其 `post Mean Dice` 从 `0.3558` 提升到 `0.3581`，但收益主要来自 `WT`，同时 `ET` 和 `TC` 分别回退 `-0.0031`、`-0.0010`，不符合“优先改善困难 `TC/ET`”的阶段目标。
-
-进一步尝试类别分流策略 `ET/TC=top1, WT=top2_merge`。这版混合策略在 hard8 上优于前一版：`post Mean Dice` 达到 `0.3588`，相对 `top1` 提升 `+0.0030`，同时 `ET`、`TC` 不再回退。
-
-但在与阶段一相同的固定 20 病例验证子集上，这一 hard-case 信号没有稳定泛化：
-
-| 配置 | Post Mean Dice | Post Dice ET | Post Dice TC | Post Dice WT |
-| --- | --- | --- | --- | --- |
-| `top1` | 0.5240 | 0.3729 | 0.5154 | 0.6839 |
-| `ET/TC=top1, WT=top2_merge` | 0.5221 | 0.3731 | 0.5113 | 0.6818 |
-
-对应变化为：
-
-- `post Mean Dice`: `-0.0020`
-- `ET Dice`: `+0.0002`
-- `TC Dice`: `-0.0041`
-- `WT Dice`: `-0.0021`
-
-结论：
-
-- 当前阶段二说明，单纯通过“同层第 2 个检测框 + 启发式合并”来扩宽 prompt，不能稳定带来整体收益。
-- 全类别 `top2_merge` 的增益主要偏向 `WT`，且会伤害 `ET/TC`。
-- `ET/TC=top1, WT=top2_merge` 在 hard cases 上有一定价值，但在 20 例回归中没有站住，因此也不应升级为默认策略。
-- 当前默认 prompt policy 仍建议保持 `top1`。
-
-下一步更值得继续提升的方向是：
-
-- 优先研究 `z` 轴连续性的 prompt 策略，而不是继续放宽同层 `top2_merge` 规则。
-- 更具体地说，可以尝试基于前后层稳定框的传播、平滑或缺失层补框，解决当前 slice-wise 独立检测导致的断层问题。
-- 在实现 3D 连续性 prompt 之前，建议先对 `BraTS2021_00021`、`BraTS2021_00117`、`BraTS2021_00143` 等明显退化病例做失败模式分析，确认是框扩宽引入背景，还是层间不连续导致的 prompt 漂移。
-
-结论：项目已经取得实质性进展，当前具备“整病例自动提示分割 + 3D 后处理 + 3D 预览”的完整实验链路；在阶段一和阶段二扩展验证后，当前默认 detector 工作点仍建议保持 `conf=0.05, iou=0.60`，当前默认 prompt policy 仍建议保持 `top1`，下一步优化重点应转向 3D 连续性驱动的 prompt 设计，而不是继续单独微调 detector 阈值或当前这版 `top2_merge` 规则。
-
-### 8.5 Web Demo 结果查看与已知边界
-
-当前 `web_demo` 结果页已支持：
-
-- 病例信息与处理状态查看
-- 3D HTML 结果嵌入
-- 2D 关键切片与分割叠加图展示
-- 基于现有分割结果与 spacing 的基础定量分析，例如 `WT / TC / ET` 体积与总体积估计
-
-其中体积计算公式为：
+体积计算公式为：
 
 ```text
 volume_ml = voxel_count * spacing_x * spacing_y * spacing_z / 1000
 ```
 
-已知边界：
+展示口径说明：
 
-- 当前 YOLO 只负责单类肿瘤框检测，不承担 `WT / TC / ET` 分类。
-- `WT / TC / ET` 的类别区分依赖后续分割链路，而不是检测器。
-- `outputs/postprocess_yolo_box_4cases` 中的部分历史样例结果已确认存在 `WT / TC / ET` 三个 mask 文件内容完全相同的情况；此时 `web_demo` 中三类体积会相同，这是对上游结果的忠实读取，不是前端显示错误。
-- 上述历史样例仍可用于流程演示、3D 查看与界面联调，但不宜作为类别级定量分析的依据；若要验证分类别体积，需要先修复推理阶段的类别区分问题并重新生成结果。
+- 标准模式强调整体病灶范围分析，只显示 `WT / 总体肿瘤`
+- 多类别分析模式展示 `WT / TC / ET` 分布与分类体积
+- `g4` 适合用于展示 `WT-only continuity` 机制，不应表述为唯一默认配置
 
 ## 9. 注意事项
 
@@ -379,6 +416,7 @@ volume_ml = voxel_count * spacing_x * spacing_y * spacing_z / 1000
 - 多任务训练会自动把图像编码器输入层改成 4 通道，以适配 BraTS 四模态输入。
 - `split_raw_data.py` 仍是本地硬编码脚本，不属于当前推荐工作流。
 - `web_demo` 的基础定量分析依赖现有 mask 与 spacing；若结果目录缺少对应文件，页面会降级显示为“暂不可用”。
+- 如果目标是结项整理，优先引用第 `0.1` 节列出的正式文档，不要直接拼接零散病例目录。
 - 仓库当前没有独立自动化测试目录，改动后建议至少运行：
 
 ```bash
