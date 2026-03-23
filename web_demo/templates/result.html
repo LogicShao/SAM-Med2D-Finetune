@@ -3,7 +3,7 @@
 {% block content %}
   <section class="section-heading page-header">
     <div>
-      <div class="eyebrow">结果查看</div>
+      <div class="eyebrow">{{ result.mode.label }}</div>
       <h1>{{ result.case_id }}</h1>
       <p>{{ result.note }}</p>
     </div>
@@ -52,8 +52,8 @@
   <section class="card analysis-panel">
     <div class="section-heading compact">
       <div>
-        <h2>定量分析</h2>
-        <p>三维定量结果基于当前分割结果自动计算，可用于辅助观察病灶范围与分区分布。</p>
+        <h2>{{ result.analysis.panel_title }}</h2>
+        <p>{{ result.analysis.panel_description }}</p>
       </div>
     </div>
     {% if result.analysis.available %}
@@ -94,8 +94,8 @@
   <section class="card viewer-card">
     <div class="section-heading compact">
       <div>
-        <h2>三维可视化结果</h2>
-        <p>可在当前页面查看病例三维可视化结果。</p>
+        <h2>{{ result.viewer_title }}</h2>
+        <p>{{ result.viewer_description }}</p>
       </div>
     </div>
     {% if result.viewer_url %}
@@ -110,7 +110,8 @@
 
   <section class="card-grid content-split-grid">
     <article class="card slice-panel">
-      <h2>关键切片 / 分割叠加</h2>
+      <h2>{{ result.slice_title }}</h2>
+      <p class="muted">{{ result.slice_description }}</p>
       <div class="slice-gallery slice-grid">
         {% if result.slice_images %}
           {% for item in result.slice_images %}
@@ -129,7 +130,8 @@
     </article>
 
     <article class="card summary-panel">
-      <h2>结果说明</h2>
+      <h2>{{ result.summary_title }}</h2>
+      <p class="muted">{{ result.summary_description }}</p>
       <div class="summary-copy">
         {% for line in result.summary_lines %}
           <p>{{ line }}</p>

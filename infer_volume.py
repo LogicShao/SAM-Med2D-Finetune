@@ -16,6 +16,15 @@ from tqdm import tqdm
 from brats_case import BraTSCase
 from model_factory import load_multitask_model
 from postprocess_3d import postprocess_brats_masks
+from prompt_strategies import (
+    CLASS_PROMPT_VARIANTS,
+    ET_PROMPT_VARIANTS,
+    PREDICTION_CLASS_ORDER,
+    analyze_class_volume_consistency,
+    build_class_specific_prompt_info,
+    sanitize_prompt_records_for_json,
+    summarize_prompt_records,
+)
 
 
 CLASS_NAMES = ("ET", "TC", "WT")
@@ -23,6 +32,7 @@ DEFAULT_YOLO_CHECKPOINT = "workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.p
 DEFAULT_YOLO_IMGSZ = 320
 PROMPT_BOX_STRATEGIES = ("top1", "top2_merge")
 Z_PROMPT_MODES = ("none", "smooth", "interpolate")
+LOGGER = logging.getLogger(__name__)
 
 
 def normalize_class_prompt_strategies(
@@ -568,6 +578,7 @@ class YoloBoxPromptProvider:
                 "trigger_reasons": {},
             },
             "wt_continuity_events": [],
+            "prompt_events": [],
         }
 
     def _ensure_case_runtime(self, case_id):
@@ -579,6 +590,10 @@ class YoloBoxPromptProvider:
     def record_wt_continuity_eligibility(self, case_id):
         runtime = self._ensure_case_runtime(case_id)
         runtime["wt_continuity_summary"]["eligible_total"] += 1
+
+    def record_prompt_event(self, case_id, payload):
+        runtime = self._ensure_case_runtime(case_id)
+        runtime["prompt_events"].append(payload)
 
     def record_wt_continuity_trigger(
         self,
@@ -800,6 +815,7 @@ class YoloBoxPromptProvider:
                 "summary": wt_continuity_summary,
                 "events": wt_continuity_events,
             },
+            "runtime_prompt_events": runtime["prompt_events"],
         }
 
 
@@ -852,6 +868,8 @@ def parse_args():
     parser.add_argument("--prompt_box_strategy_et", default=None, choices=PROMPT_BOX_STRATEGIES)
     parser.add_argument("--prompt_box_strategy_tc", default=None, choices=PROMPT_BOX_STRATEGIES)
     parser.add_argument("--prompt_box_strategy_wt", default=None, choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--class_prompt_variant", default="baseline", choices=CLASS_PROMPT_VARIANTS)
+    parser.add_argument("--et_prompt_variant", default="default", choices=ET_PROMPT_VARIANTS)
     parser.add_argument("--top2_score_ratio", type=float, default=0.5)
     parser.add_argument("--top2_area_ratio_min", type=float, default=0.1)
     parser.add_argument("--top2_area_ratio_max", type=float, default=2.0)
@@ -950,14 +968,19 @@ def _predict_mask_from_prompt(
     image_embeddings,
     dense_pe,
     boxes,
+    point_coords,
+    point_labels,
     mask_input,
     image_size,
     original_width,
     original_height,
     threshold,
 ):
+    points = None
+    if point_coords is not None and point_labels is not None:
+        points = (point_coords, point_labels)
     sparse_embeddings, dense_embeddings = model.prompt_encoder(
-        points=None,
+        points=points,
         boxes=boxes,
         masks=mask_input,
     )
@@ -1044,12 +1067,56 @@ def _evaluate_wt_continuity_gate(prompt_info, wt_state, prompt_provider):
     return True, reasons
 
 
-def run_volume_inference(model, brats_case, prompt_provider, image_size, threshold, device, use_amp):
+def _materialize_prompt_tensors(prompt_payload, device, mask_input_size=None):
+    box_xyxy = prompt_payload.get("box_xyxy")
+    points_xy = prompt_payload.get("points_xy") or []
+    point_labels = prompt_payload.get("point_labels") or []
+    mask_input = prompt_payload.get("mask_input")
+
+    boxes = None
+    if box_xyxy is not None:
+        boxes = torch.tensor([[box_xyxy]], dtype=torch.float32, device=device)
+
+    point_coords_tensor = None
+    point_labels_tensor = None
+    if points_xy:
+        point_coords_tensor = torch.tensor([points_xy], dtype=torch.float32, device=device)
+        point_labels_tensor = torch.tensor([point_labels], dtype=torch.int64, device=device)
+
+    mask_input_tensor = None
+    if mask_input is not None:
+        if mask_input_size is not None and tuple(mask_input.shape) != tuple(mask_input_size):
+            target_width = int(mask_input_size[1])
+            target_height = int(mask_input_size[0])
+            mask_input = cv2.resize(
+                np.asarray(mask_input, dtype=np.float32),
+                (target_width, target_height),
+                interpolation=cv2.INTER_LINEAR,
+            )
+        mask_input_tensor = torch.from_numpy(
+            np.ascontiguousarray(mask_input[None, None, :, :], dtype=np.float32)
+        ).to(device=device, dtype=torch.float32)
+
+    return boxes, point_coords_tensor, point_labels_tensor, mask_input_tensor
+
+
+def run_volume_inference(
+    model,
+    brats_case,
+    prompt_provider,
+    image_size,
+    threshold,
+    device,
+    use_amp,
+    class_prompt_variant="baseline",
+    et_prompt_variant="default",
+):
     height, width, depth = brats_case.shape
     class_volumes = {
         class_name: np.zeros((height, width, depth), dtype=np.uint8)
         for class_name in CLASS_NAMES
     }
+    runtime_prompt_records = []
 
     amp_enabled = use_amp and device.type == "cuda"
     wt_state = WTContinuityState()
@@ -1058,11 +1125,11 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
 
     with torch.no_grad():
         for slice_index in tqdm(range(depth), desc=f"Infer {brats_case.case_id}"):
-            prompt_infos = {}
+            base_prompt_infos = {}
             has_any_prompt = False
             for class_index, class_name in enumerate(CLASS_NAMES):
                 if hasattr(prompt_provider, "get_prompt_info"):
-                    prompt_info = prompt_provider.get_prompt_info(
+                    base_prompt_info = prompt_provider.get_prompt_info(
                         class_index=class_index,
                         slice_index=slice_index,
                         brats_case=brats_case,
@@ -1077,7 +1144,7 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                     if boxes is not None:
                         selected_box = boxes.detach().cpu().reshape(-1, 4)[0].tolist()
                         has_any_prompt = True
-                    prompt_info = {
+                    base_prompt_info = {
                         "boxes": boxes,
                         "primary_box_xyxy": list(selected_box) if selected_box is not None else None,
                         "primary_score": None,
@@ -1086,12 +1153,12 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                         "slice_index": int(slice_index),
                         "selected_box_xyxy": list(selected_box) if selected_box is not None else None,
                     }
-                if prompt_info["boxes"] is not None:
+                if base_prompt_info["boxes"] is not None:
                     has_any_prompt = True
-                prompt_infos[class_name] = prompt_info
+                base_prompt_infos[class_name] = base_prompt_info
 
             wt_eligible, wt_trigger_reasons = _evaluate_wt_continuity_gate(
-                prompt_infos["WT"],
+                base_prompt_infos["WT"],
                 wt_state,
                 prompt_provider,
             )
@@ -1109,45 +1176,77 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
             with autocast(device_type=device.type, enabled=amp_enabled):
                 image_embeddings = model.image_encoder(input_tensor)
                 dense_pe = model.prompt_encoder.get_dense_pe()
+                predicted_masks_for_slice = {}
+                for class_name in PREDICTION_CLASS_ORDER:
+                    base_prompt_info = base_prompt_infos[class_name]
+                    prompt_payload = build_class_specific_prompt_info(
+                        class_name=class_name,
+                        slice_index=slice_index,
+                        brats_case=brats_case,
+                        image_size=image_size,
+                        base_prompt_info=base_prompt_info,
+                        predicted_masks=predicted_masks_for_slice,
+                        class_prompt_variant=class_prompt_variant,
+                        et_prompt_variant=et_prompt_variant,
+                    )
 
-                for class_index, class_name in enumerate(CLASS_NAMES):
-                    prompt_info = prompt_infos[class_name]
-                    boxes = prompt_info["boxes"]
+                    if hasattr(prompt_provider, "record_prompt_event"):
+                        prompt_provider.record_prompt_event(
+                            brats_case.case_id,
+                            {
+                                key: value
+                                for key, value in sanitize_prompt_records_for_json([prompt_payload])[0].items()
+                                if key != "mask_input"
+                            },
+                        )
+                    runtime_prompt_records.append(sanitize_prompt_records_for_json([prompt_payload])[0])
+
+                    boxes, point_coords, point_labels, mask_input = _materialize_prompt_tensors(
+                        prompt_payload,
+                        device,
+                        mask_input_size=getattr(model.prompt_encoder, "mask_input_size", None),
+                    )
 
                     if class_name != "WT" or not bool(getattr(prompt_provider, "wt_continuity_enabled", False)):
-                        if boxes is None:
+                        if boxes is None and point_coords is None and mask_input is None:
+                            predicted_masks_for_slice[class_name] = np.zeros((height, width), dtype=np.uint8)
                             continue
-                        boxes = boxes.to(device=device, dtype=torch.float32)
                         result = _predict_mask_from_prompt(
                             model=model,
                             image_embeddings=image_embeddings,
                             dense_pe=dense_pe,
                             boxes=boxes,
-                            mask_input=None,
+                            point_coords=point_coords,
+                            point_labels=point_labels,
+                            mask_input=mask_input,
                             image_size=image_size,
                             original_width=width,
                             original_height=height,
                             threshold=threshold,
                         )
                         class_volumes[class_name][:, :, slice_index] = result["binary_mask"]
+                        predicted_masks_for_slice[class_name] = result["binary_mask"]
                         continue
 
                     wt_trigger_source = None
-                    wt_used_box_xyxy = prompt_info.get("selected_box_xyxy")
+                    wt_used_box_xyxy = prompt_payload.get("box_xyxy")
                     final_result = None
                     baseline_binary = np.zeros((height, width), dtype=np.uint8)
 
-                    if boxes is None:
+                    if boxes is None and point_coords is None and mask_input is None:
                         if not wt_should_trigger:
                             wt_state.clear()
+                            predicted_masks_for_slice[class_name] = np.zeros((height, width), dtype=np.uint8)
                             continue
                     else:
                         baseline_result = _predict_mask_from_prompt(
                             model=model,
                             image_embeddings=image_embeddings,
                             dense_pe=dense_pe,
-                            boxes=boxes.to(device=device, dtype=torch.float32),
-                            mask_input=None,
+                            boxes=boxes,
+                            point_coords=point_coords,
+                            point_labels=point_labels,
+                            mask_input=mask_input,
                             image_size=image_size,
                             original_width=width,
                             original_height=height,
@@ -1157,9 +1256,13 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
 
                     if wt_should_trigger:
                         continuity_boxes = boxes
-                        wt_trigger_source = "current_box_plus_coarse_mask"
+                        continuity_points = point_coords
+                        continuity_labels = point_labels
+                        wt_trigger_source = "current_prompt_plus_coarse_mask"
                         if continuity_boxes is None and wt_state.prev_box_xyxy is not None:
-                            continuity_boxes = torch.tensor([[wt_state.prev_box_xyxy]], dtype=torch.float32)
+                            continuity_boxes = torch.tensor([[wt_state.prev_box_xyxy]], dtype=torch.float32, device=device)
+                            continuity_points = None
+                            continuity_labels = None
                             wt_trigger_source = "prev_box_plus_coarse_mask"
                             wt_used_box_xyxy = list(wt_state.prev_box_xyxy)
 
@@ -1173,7 +1276,9 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                                 model=model,
                                 image_embeddings=image_embeddings,
                                 dense_pe=dense_pe,
-                                boxes=continuity_boxes.to(device=device, dtype=torch.float32),
+                                boxes=continuity_boxes,
+                                point_coords=continuity_points,
+                                point_labels=continuity_labels,
                                 mask_input=continuity_mask.to(device=device, dtype=torch.float32),
                                 image_size=image_size,
                                 original_width=width,
@@ -1186,8 +1291,8 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                                     slice_index=slice_index,
                                     trigger_reasons=wt_trigger_reasons,
                                     source=wt_trigger_source,
-                                    primary_box_xyxy=prompt_info.get("primary_box_xyxy"),
-                                    primary_score=prompt_info.get("primary_score"),
+                                    primary_box_xyxy=base_prompt_info.get("primary_box_xyxy"),
+                                    primary_score=base_prompt_info.get("primary_score"),
                                     used_box_xyxy=wt_used_box_xyxy,
                                     prev_slice_index=wt_state.prev_slice_index,
                                     prev_box_xyxy=wt_state.prev_box_xyxy,
@@ -1198,12 +1303,14 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                                 )
 
                     if final_result is None:
-                        if boxes is None:
+                        if boxes is None and point_coords is None and mask_input is None:
                             wt_state.clear()
+                            predicted_masks_for_slice[class_name] = np.zeros((height, width), dtype=np.uint8)
                             continue
                         final_result = baseline_result
 
                     class_volumes[class_name][:, :, slice_index] = final_result["binary_mask"]
+                    predicted_masks_for_slice[class_name] = final_result["binary_mask"]
                     final_binary_area = float(final_result["binary_mask"].sum())
                     if final_binary_area <= 0.0:
                         wt_state.clear()
@@ -1212,12 +1319,23 @@ def run_volume_inference(model, brats_case, prompt_provider, image_size, thresho
                     wt_state.update(
                         slice_index=slice_index,
                         box_xyxy=wt_used_box_xyxy,
-                        score=prompt_info.get("primary_score"),
+                        score=base_prompt_info.get("primary_score"),
                         lowres_prompt=final_result["lowres_prompt"],
                         binary_area=final_binary_area,
                     )
 
-    return class_volumes
+    raw_consistency = analyze_class_volume_consistency(class_volumes)
+    for warning in raw_consistency.get("warnings", []):
+        LOGGER.warning("Case %s raw mask warning: %s", brats_case.case_id, warning)
+
+    inference_report = {
+        "class_prompt_variant": str(class_prompt_variant),
+        "et_prompt_variant": str(et_prompt_variant),
+        "prompt_records": runtime_prompt_records,
+        "prompt_summary": summarize_prompt_records(runtime_prompt_records),
+        "raw_consistency": raw_consistency,
+    }
+    return class_volumes, inference_report
 
 
 def build_combined_label(class_volumes):
@@ -1315,6 +1433,8 @@ def build_yolo_prompt_config(
     wt_continuity_area_ratio_max,
     wt_continuity_mask_dilate_iters,
     wt_continuity_mask_blur_kernel,
+    class_prompt_variant,
+    et_prompt_variant,
 ):
     if prompt_mode != "yolo_box":
         return None
@@ -1356,6 +1476,8 @@ def build_yolo_prompt_config(
             "mask_dilate_iters": int(wt_continuity_mask_dilate_iters),
             "mask_blur_kernel": int(wt_continuity_mask_blur_kernel),
         },
+        "class_prompt_variant": str(class_prompt_variant),
+        "et_prompt_variant": str(et_prompt_variant),
     }
 
 
@@ -1457,7 +1579,7 @@ def main():
         encoder_adapter=args.encoder_adapter,
     )
 
-    class_volumes = run_volume_inference(
+    class_volumes, inference_report = run_volume_inference(
         model=model,
         brats_case=brats_case,
         prompt_provider=prompt_provider,
@@ -1465,6 +1587,8 @@ def main():
         threshold=args.threshold,
         device=device,
         use_amp=args.use_amp,
+        class_prompt_variant=args.class_prompt_variant,
+        et_prompt_variant=args.et_prompt_variant,
     )
     combined_label = build_combined_label(class_volumes)
 
@@ -1523,6 +1647,12 @@ def main():
             "post_combined_label.nii.gz",
             "postprocess_report.json",
         ])
+    else:
+        postprocessed_volumes = class_volumes
+
+    post_consistency = analyze_class_volume_consistency(postprocessed_volumes)
+    for warning in post_consistency.get("warnings", []):
+        LOGGER.warning("Case %s post mask warning: %s", brats_case.case_id, warning)
 
     prompt_report_path = None
     if hasattr(prompt_provider, "build_case_prompt_report"):
@@ -1556,7 +1686,15 @@ def main():
             wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
             wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+            class_prompt_variant=args.class_prompt_variant,
+            et_prompt_variant=args.et_prompt_variant,
         )
+        prompt_report["runtime_prompt_summary"] = inference_report["prompt_summary"]
+        prompt_report["runtime_prompt_events"] = inference_report["prompt_records"]
+        prompt_report["mask_quality_checks"] = {
+            "raw": inference_report["raw_consistency"],
+            "post": post_consistency,
+        }
         save_json(prompt_report_path, prompt_report)
         saved_files.append("prompt_stats.json")
 
@@ -1600,6 +1738,8 @@ def main():
             wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
             wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+            class_prompt_variant=args.class_prompt_variant,
+            et_prompt_variant=args.et_prompt_variant,
         ),
     )
     save_case_meta(brats_case, output_dir, meta)

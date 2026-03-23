@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from web_demo.config import get_demo_mode, list_demo_modes, normalize_demo_mode
 from web_demo.services.job_state import get_job
 from web_demo.services.logger import read_log_tail
 from web_demo.services.pipeline import prepare_case_input, start_pipeline_job
@@ -38,12 +39,17 @@ def _build_job_status_payload(run_id: str) -> dict[str, object]:
 
 @router.get("/run", response_class=HTMLResponse)
 def run_page(request: Request) -> HTMLResponse:
+    selected_mode_key = normalize_demo_mode(request.query_params.get("mode"))
     return _render_run_template(
         request,
         title="病例处理",
         active_nav="run",
+        mode_key=selected_mode_key,
         page_mode="form",
         notice=None,
+        selected_mode=get_demo_mode(selected_mode_key),
+        selected_mode_key=selected_mode_key,
+        demo_modes=list_demo_modes(),
     )
 
 
@@ -58,10 +64,14 @@ def run_wait_page(request: Request, run_id: str) -> HTMLResponse:
         request,
         title=f"处理中 - {run_id}",
         active_nav="run",
+        mode_key=normalize_demo_mode(payload.get("mode_key")),
         page_mode="wait",
         run_id=run_id,
         initial_state=payload,
         initial_state_json=json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
+        selected_mode=get_demo_mode(payload.get("mode_key")),
+        selected_mode_key=normalize_demo_mode(payload.get("mode_key")),
+        demo_modes=list_demo_modes(),
     )
 
 
@@ -78,17 +88,24 @@ def run_status_api(run_id: str) -> JSONResponse:
 def run_case(
     request: Request,
     case_dir: str = Form(default=""),
+    mode: str = Form(default="standard"),
     files: list[UploadFile] | None = File(default=None),
 ):
+    selected_mode_key = normalize_demo_mode(mode)
     try:
         case_input = prepare_case_input(case_dir_text=case_dir, uploaded_files=files)
+        case_input["mode_key"] = selected_mode_key
         job = start_pipeline_job(case_input)
-        return RedirectResponse(url=f"/run/{job['run_id']}", status_code=303)
+        return RedirectResponse(url=f"/run/{job['run_id']}?mode={selected_mode_key}", status_code=303)
     except Exception as exc:
         return _render_run_template(
             request,
             title="病例处理",
             active_nav="run",
+            mode_key=selected_mode_key,
             page_mode="form",
             notice=build_notice(str(exc), tone="error"),
+            selected_mode=get_demo_mode(selected_mode_key),
+            selected_mode_key=selected_mode_key,
+            demo_modes=list_demo_modes(),
         )

@@ -6,9 +6,9 @@
       <div>
         <div class="eyebrow">病例处理</div>
         <h1>导入病例并开始处理</h1>
-        <p>支持单病例导入、自动处理与结果查看。</p>
+        <p>支持单病例导入、自动处理与结果查看。默认入口为标准模式。</p>
       </div>
-      <a class="button ghost" href="/">返回首页</a>
+      <a class="button ghost" href="/?mode={{ selected_mode_key }}">返回首页</a>
     </section>
 
     {% if notice %}
@@ -17,6 +17,26 @@
 
     <section class="card form-card">
       <form class="upload-form" id="run-form" action="/run" method="post" enctype="multipart/form-data">
+        <div class="mode-selector">
+          <div class="section-heading compact">
+            <div>
+              <h2>模式选择</h2>
+              <p>标准模式为默认入口，多类别分析模式用于辅助观察不同肿瘤区域分布。</p>
+            </div>
+          </div>
+          <div class="mode-option-grid">
+            {% for mode in demo_modes %}
+              <label class="mode-option-card{% if mode.key == selected_mode_key %} active{% endif %}">
+                <input type="radio" name="mode" value="{{ mode.key }}"{% if mode.key == selected_mode_key %} checked{% endif %}>
+                <span class="mode-option-copy">
+                  <strong>{{ mode.label }}</strong>
+                  <span>{{ mode.tagline }}</span>
+                </span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+
         <div class="form-grid">
           <label class="field">
             <span>本机病例目录</span>
@@ -38,7 +58,7 @@
         </div>
 
         <div class="inline-note">
-          <strong>说明：</strong> 系统将依次完成自动分割、结果处理与三维可视化生成，并实时更新处理状态。
+          <strong>说明：</strong> 系统将按所选模式完成自动分割、结果处理与三维可视化生成，并实时更新处理状态。
         </div>
 
         <div class="hero-actions">
@@ -78,6 +98,10 @@
           <strong id="job-run-id">{{ initial_state.run_id }}</strong>
         </article>
         <article class="metric-card job-meta-card">
+          <span>处理模式</span>
+          <strong id="job-mode-label">{{ initial_state.mode_label }}</strong>
+        </article>
+        <article class="metric-card job-meta-card">
           <span>导入方式</span>
           <strong id="job-source-type">
             {% if initial_state.source_type == "directory" %}
@@ -102,7 +126,7 @@
       <div class="section-heading compact">
         <div>
           <h2>处理进度</h2>
-          <p>系统将按步骤完成图像处理与三维结果生成，并显示当前所处阶段。</p>
+          <p>系统将按所选模式完成图像处理与三维结果生成，并显示当前所处阶段。</p>
         </div>
       </div>
       <div class="job-stage-grid" id="job-stage-grid"></div>

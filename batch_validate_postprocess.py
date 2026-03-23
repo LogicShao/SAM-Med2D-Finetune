@@ -27,6 +27,13 @@ from infer_volume import (
 )
 from model_factory import load_multitask_model
 from postprocess_3d import postprocess_brats_masks
+from prompt_strategies import (
+    CLASS_PROMPT_VARIANTS,
+    ET_PROMPT_VARIANTS,
+    analyze_class_volume_consistency,
+    merge_prompt_source_counts,
+    summarize_consistency_across_cases,
+)
 from visualize_case import render_case
 
 
@@ -60,6 +67,8 @@ def parse_args():
     parser.add_argument("--prompt_box_strategy_et", default=None, choices=PROMPT_BOX_STRATEGIES)
     parser.add_argument("--prompt_box_strategy_tc", default=None, choices=PROMPT_BOX_STRATEGIES)
     parser.add_argument("--prompt_box_strategy_wt", default=None, choices=PROMPT_BOX_STRATEGIES)
+    parser.add_argument("--class_prompt_variant", default="baseline", choices=CLASS_PROMPT_VARIANTS)
+    parser.add_argument("--et_prompt_variant", default="default", choices=ET_PROMPT_VARIANTS)
     parser.add_argument("--top2_score_ratio", type=float, default=0.5)
     parser.add_argument("--top2_area_ratio_min", type=float, default=0.1)
     parser.add_argument("--top2_area_ratio_max", type=float, default=2.0)
@@ -274,6 +283,7 @@ def write_summary_markdown(output_path, summary):
 
     aggregate = summary.get("aggregate", {})
     aggregate_wt_continuity = summary.get("aggregate_wt_continuity", {})
+    aggregate_consistency = summary.get("aggregate_consistency", {})
     config = summary.get("config", {})
     cases = summary.get("cases", [])
     failures = summary.get("failures", [])
@@ -312,6 +322,8 @@ def write_summary_markdown(output_path, summary):
             f"- Prompt box strategy ET: `{box_strategy_by_class.get('ET')}`",
             f"- Prompt box strategy TC: `{box_strategy_by_class.get('TC')}`",
             f"- Prompt box strategy WT: `{box_strategy_by_class.get('WT')}`",
+            f"- Class prompt variant: `{config.get('class_prompt_variant')}`",
+            f"- ET prompt variant: `{config.get('et_prompt_variant')}`",
             f"- Top2 score ratio: `{top2_rules.get('score_ratio')}`",
             f"- Top2 area ratio min: `{top2_rules.get('area_ratio_min')}`",
             f"- Top2 area ratio max: `{top2_rules.get('area_ratio_max')}`",
@@ -373,6 +385,35 @@ def write_summary_markdown(output_path, summary):
                     f"`{json.dumps(aggregate_wt_continuity.get('trigger_reasons', {}), ensure_ascii=False)}` |"
                 ),
             ])
+        raw_consistency = aggregate_consistency.get("raw") or {}
+        post_consistency = aggregate_consistency.get("post") or {}
+        prompt_sources = aggregate_consistency.get("prompt_sources") or {}
+        lines.extend([
+            "",
+            "### Prompt Consistency Aggregate",
+            "",
+            "| Stage | WT=TC=ET cases | Ratio | ET<=TC<=WT valid cases | Ratio |",
+            "| --- | ---: | ---: | ---: | ---: |",
+            (
+                f"| Raw | {raw_consistency.get('all_equal_cases', 0)} | "
+                f"{_format_metric(raw_consistency.get('all_equal_ratio', 0.0))} | "
+                f"{raw_consistency.get('hierarchy_order_valid_cases', 0)} | "
+                f"{_format_metric(raw_consistency.get('hierarchy_order_valid_ratio', 0.0))} |"
+            ),
+            (
+                f"| Post | {post_consistency.get('all_equal_cases', 0)} | "
+                f"{_format_metric(post_consistency.get('all_equal_ratio', 0.0))} | "
+                f"{post_consistency.get('hierarchy_order_valid_cases', 0)} | "
+                f"{_format_metric(post_consistency.get('hierarchy_order_valid_ratio', 0.0))} |"
+            ),
+            "",
+            "### Prompt Source Aggregate",
+            "",
+            "| Class | Source Counts |",
+            "| --- | --- |",
+        ])
+        for class_name in CLASS_NAMES[::-1]:
+            lines.append(f"| {class_name} | `{json.dumps(prompt_sources.get(class_name, {}), ensure_ascii=False)}` |")
     else:
         lines.extend([
             "## Aggregate",
@@ -460,7 +501,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
     output_dir = Path(output_root) / brats_case.case_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    class_volumes = run_volume_inference(
+    class_volumes, inference_report = run_volume_inference(
         model=model,
         brats_case=brats_case,
         prompt_provider=prompt_provider,
@@ -468,6 +509,8 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         threshold=args.threshold,
         device=device,
         use_amp=args.use_amp,
+        class_prompt_variant=args.class_prompt_variant,
+        et_prompt_variant=args.et_prompt_variant,
     )
     raw_combined = build_combined_label(class_volumes)
     save_mask_outputs(brats_case, output_dir, class_volumes, raw_combined)
@@ -507,6 +550,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         }
         postprocess_report_path = output_dir / "postprocess_report.json"
         save_json(postprocess_report_path, postprocess_report)
+    inference_report["post_consistency"] = analyze_class_volume_consistency(postprocessed_volumes)
 
     initial_meta = build_case_meta(
         brats_case=brats_case,
@@ -548,6 +592,8 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
             wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+            class_prompt_variant=args.class_prompt_variant,
+            et_prompt_variant=args.et_prompt_variant,
         ),
     )
     save_case_meta(brats_case, output_dir, initial_meta)
@@ -593,7 +639,15 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
             wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+            class_prompt_variant=args.class_prompt_variant,
+            et_prompt_variant=args.et_prompt_variant,
         )
+        prompt_report["runtime_prompt_summary"] = inference_report["prompt_summary"]
+        prompt_report["runtime_prompt_events"] = inference_report["prompt_records"]
+        prompt_report["mask_quality_checks"] = {
+            "raw": inference_report["raw_consistency"],
+            "post": inference_report.get("post_consistency"),
+        }
         prompt_report_path = output_dir / "prompt_stats.json"
         save_json(prompt_report_path, prompt_report)
 
@@ -637,6 +691,8 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_area_ratio_max=args.wt_continuity_area_ratio_max,
             wt_continuity_mask_dilate_iters=args.wt_continuity_mask_dilate_iters,
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
+            class_prompt_variant=args.class_prompt_variant,
+            et_prompt_variant=args.et_prompt_variant,
         ),
     )
     save_case_meta(brats_case, output_dir, meta)
@@ -648,6 +704,9 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         "post": post_metrics,
         "prompt_report_path": str(prompt_report_path.resolve()) if prompt_report_path else None,
         "wt_continuity": None if prompt_report is None else prompt_report.get("wt_continuity"),
+        "raw_consistency": inference_report["raw_consistency"],
+        "post_consistency": inference_report.get("post_consistency"),
+        "prompt_summary": inference_report["prompt_summary"],
     }
 
 
@@ -744,6 +803,8 @@ def main():
                 "TC": str(args.prompt_box_strategy_tc or args.prompt_box_strategy),
                 "WT": str(args.prompt_box_strategy_wt or args.prompt_box_strategy),
             } if args.prompt_mode == "yolo_box" else None,
+            "class_prompt_variant": str(args.class_prompt_variant) if args.prompt_mode == "yolo_box" else None,
+            "et_prompt_variant": str(args.et_prompt_variant) if args.prompt_mode == "yolo_box" else None,
             "yolo_top2_rules": {
                 "score_ratio": float(args.top2_score_ratio),
                 "area_ratio_min": float(args.top2_area_ratio_min),
@@ -780,6 +841,11 @@ def main():
         },
         "aggregate": summarize_results(results),
         "aggregate_wt_continuity": summarize_wt_continuity(results),
+        "aggregate_consistency": {
+            "raw": summarize_consistency_across_cases(results, "raw_consistency"),
+            "post": summarize_consistency_across_cases(results, "post_consistency"),
+            "prompt_sources": merge_prompt_source_counts(results),
+        },
         "cases": results,
         "failures": failures,
     }

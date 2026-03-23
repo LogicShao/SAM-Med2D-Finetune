@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from web_demo.config import get_demo_mode, list_demo_modes, normalize_demo_mode
 from web_demo.services.cases import list_sample_cases
 from web_demo.ui.common import build_page_context
 
@@ -33,24 +34,34 @@ def _render_home_template(request: Request, *, title: str, active_nav: str, **co
 
 @router.get("/", response_class=HTMLResponse)
 def home_page(request: Request) -> HTMLResponse:
+    selected_mode_key = normalize_demo_mode(request.query_params.get("mode"))
     sample_cases = list_sample_cases()
     return _render_home_template(
         request,
         title="首页",
         active_nav="home",
+        mode_key=selected_mode_key,
         page_mode="home",
         sample_count=len(sample_cases),
         steps=HOME_STEPS,
         constraints=HOME_CONSTRAINTS,
+        selected_mode=get_demo_mode(selected_mode_key),
+        selected_mode_key=selected_mode_key,
+        demo_modes=list_demo_modes(),
     )
 
 
 @router.get("/samples", response_class=HTMLResponse)
 def sample_cases_page(request: Request) -> HTMLResponse:
+    selected_mode_key = normalize_demo_mode(request.query_params.get("mode"))
     return _render_home_template(
         request,
         title="病例列表",
         active_nav="samples",
+        mode_key=selected_mode_key,
         page_mode="samples",
         sample_cases=list_sample_cases(),
+        selected_mode=get_demo_mode(selected_mode_key),
+        selected_mode_key=selected_mode_key,
+        demo_modes=list_demo_modes(),
     )

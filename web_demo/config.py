@@ -16,7 +16,7 @@ UPLOAD_STAGE_DIR = DEMO_RUNS_DIR / "uploads"
 GENERATED_IMAGE_DIR = STATIC_DIR / "generated"
 
 APP_NAME = "脑肿瘤 MRI 三维可视化辅助分析平台"
-APP_DESCRIPTION = "支持病例导入、自动处理与结果查看。"
+APP_DESCRIPTION = "支持稳健默认配置与多类别分割分析两种模式。"
 APP_HOST = os.getenv("WEB_DEMO_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("WEB_DEMO_PORT", "7860"))
 PYTHON_EXECUTABLE = Path(os.getenv("WEB_DEMO_PYTHON", sys.executable)).resolve()
@@ -97,6 +97,78 @@ DEFAULT_POSTPROCESS_ARGS = {
     "keep_topk_et": 1,
     "z_smooth_iterations": 3,
 }
+
+DEFAULT_DEMO_MODE = "standard"
+
+DEMO_MODES = {
+    "standard": {
+        "key": "standard",
+        "label": "标准模式",
+        "short_label": "稳健默认配置",
+        "tagline": "重点查看整体病灶范围、三维结果与关键切片。",
+        "description": "使用稳健默认配置，页面重点展示整体病灶范围、三维结果与结果查看。",
+        "result_note": "当前页面展示稳健默认配置下的整体病灶分析结果。",
+        "analysis_title": "整体病灶分析",
+        "analysis_description": "当前页面重点展示整体病灶范围与体积信息，可用于辅助查看病灶总体分布。",
+        "summary_title": "结果说明",
+        "summary_description": "当前页面重点展示整体病灶范围、三维结果与关键切片。",
+        "slice_title": "关键切片",
+        "slice_description": "页面重点展示整体病灶范围与关键切片。",
+        "viewer_title": "三维可视化结果",
+        "viewer_description": "当前页面重点展示整体病灶范围的三维结果。",
+        "viewer_mask_name": "WT",
+        "analysis_card_keys": ("total", "wt"),
+        "show_multiclass_details": False,
+        "warning_copy": "若存在分区结果，可作为辅助参考，但不作为当前页面的主要展示重点。",
+        "inference_overrides": {
+            "class_prompt_variant": "baseline",
+            "wt_continuity_enabled": False,
+        },
+        "postprocess_overrides": {},
+    },
+    "multiclass": {
+        "key": "multiclass",
+        "label": "多类别分析模式",
+        "short_label": "多类别分割分析",
+        "tagline": "重点查看 WT / TC / ET 区域分布、分类体积与三维结果。",
+        "description": "使用当前默认的多类别 prompt 分析方案，页面重点展示不同肿瘤区域分布。",
+        "result_note": "当前页面展示多类别分割分析结果，可用于辅助观察不同肿瘤区域分布。",
+        "analysis_title": "多类别定量分析",
+        "analysis_description": "当前页面展示 WT / TC / ET 分区结果，可用于辅助观察不同肿瘤区域分布。",
+        "summary_title": "分析说明",
+        "summary_description": "当前页面展示多类别分割分析结果，用于辅助观察不同肿瘤区域分布。",
+        "slice_title": "分类切片 / 分割叠加",
+        "slice_description": "页面展示多类别分割叠加结果，可用于辅助观察不同肿瘤区域分布。",
+        "viewer_title": "分类三维结果",
+        "viewer_description": "当前页面重点展示 WT / TC / ET 的分类三维结果。",
+        "viewer_mask_name": "all",
+        "analysis_card_keys": ("total", "wt", "tc", "et"),
+        "show_multiclass_details": True,
+        "warning_copy": "当前结果用于多类别辅助分析，不替代稳健默认配置的整体病灶查看。",
+        "inference_overrides": {
+            "class_prompt_variant": "class_boxes_points",
+            "et_prompt_variant": "default",
+            "wt_continuity_enabled": False,
+        },
+        "postprocess_overrides": {},
+    },
+}
+
+
+def normalize_demo_mode(mode_key: str | None) -> str:
+    mode_key = str(mode_key or DEFAULT_DEMO_MODE).strip().lower()
+    if mode_key not in DEMO_MODES:
+        return DEFAULT_DEMO_MODE
+    return mode_key
+
+
+def get_demo_mode(mode_key: str | None) -> dict[str, object]:
+    normalized = normalize_demo_mode(mode_key)
+    return {**DEMO_MODES[normalized]}
+
+
+def list_demo_modes() -> list[dict[str, object]]:
+    return [get_demo_mode(mode_key) for mode_key in DEMO_MODES]
 
 
 def ensure_web_demo_dirs() -> None:

@@ -7,6 +7,15 @@
 
 当前实现支持 `Adapter` 和 `LoRA` 两种微调方式，并输出日志、模型和训练曲线。
 
+除训练与评估外，仓库当前还包含：
+
+- 整病例自动推理入口 `infer_volume.py`
+- 3D 后处理与结果整理 `postprocess_3d.py`
+- 3D 可视化页面生成 `visualize_case.py`
+- 面向演示与结果查看的 `web_demo/`
+
+如果你只想快速查看现成病例结果，建议直接启动 `web_demo`；如果你要复现实验或替换模型，再使用训练与整病例推理脚本。
+
 ## 1. 仓库结构
 
 ```text
@@ -14,16 +23,22 @@
 ├── train_singletask.py          # 单任务训练入口
 ├── train_multitask.py           # 多任务训练入口
 ├── evaluate_baseline.py         # 原始 SAM-Med2D 基线评估
+├── infer_volume.py              # 整病例自动推理入口
+├── postprocess_3d.py            # 3D 后处理与层级约束
+├── visualize_case.py            # 3D HTML 可视化生成
 ├── preprocess_brats.py          # BraTS 预处理脚本
 ├── create_subset.py             # 抽样小数据集
 ├── DataLoader.py                # 单任务数据集与 collate
 ├── multitask_dataset.py         # 多任务 BraTS 数据集
 ├── metrics.py                   # Dice / IoU 指标
 ├── utils.py                     # loss、prompt、box、日志工具
+├── tools/                       # YOLO 数据准备、训练与辅助脚本
+├── web_demo/                    # Web 结果查看与单病例处理入口
 ├── segment_anything/            # 本地 SAM-Med2D 实现
 ├── finetune_scripts/            # 固定实验配置脚本
 ├── pretrain_model/              # 预训练权重
-└── data_demo/                   # 预处理后数据示例
+├── data_demo/                   # 预处理后数据示例
+└── outputs/                     # 推理、后处理与可视化结果
 ```
 
 ## 2. 环境准备
@@ -42,6 +57,33 @@ pip install -r requirements.txt
 ```text
 pretrain_model/sam-med2d_b.pth
 ```
+
+### 2.1 Web Demo 启动
+
+`web_demo` 当前主链路为：
+
+```text
+选择病例 / 上传病例 -> 自动分割 -> 3D 重建 -> 结果查看
+```
+
+启动方式：
+
+```bash
+python -m web_demo.app
+```
+
+默认访问地址：
+
+```text
+http://127.0.0.1:7860
+```
+
+当前 `web_demo` 默认推理配置见 `web_demo/config.py`，包括：
+
+- `finetune_method=adapter`
+- `prompt_mode=yolo_box`
+- `prompt_box_strategy=top1`
+- YOLO checkpoint：`workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.pt`
 
 ## 3. 数据准备
 
@@ -202,12 +244,12 @@ workdir_xxx/
 - 多任务 Adapter 是当前多任务训练日志里表现最好的配置，优于多任务 LoRA。
 - 多任务 LoRA 的指标低于多任务 Adapter，说明继续把它作为默认 pipeline 主模型并不合理。
 
-当前推荐的整病例推理 / Web demo 默认主模型为：
+当前代码中的整病例推理 / Web demo 默认主模型为：
 
 - checkpoint：`workdir_multi_task/models/finetune_adapter/best_model.pth`
 - `finetune_method`：`adapter`
 
-此前使用的 `workdir_multi_task/models/finetune_no_stop_lora/lora_adapters` 仅保留为历史回归实验配置，不再建议作为默认 pipeline。
+此前使用的 `workdir_multi_task/models/finetune_no_stop_lora/lora_adapters` 仅保留为历史回归实验配置，不再建议作为默认 pipeline。若要切换默认模型，请直接修改 `web_demo/config.py`。
 
 ## 8. 整病例推理与端到端进展
 
@@ -230,7 +272,7 @@ workdir_xxx/
 
 ### 8.2 YOLO 检测与端到端闭环
 
-仓库现已支持将 BraTS 原始病例切片转换为 YOLO 数据集，并训练检测器为 SAM 提供自动 bbox prompt。当前最优候选检测器为 `workdir_yolo/brats_yolo_dev_img320_v8m`：
+仓库现已支持将 BraTS 原始病例切片转换为 YOLO 数据集，并训练检测器为 SAM 提供自动 bbox prompt。当前 YOLO 数据集与模型是单类检测设置，类别只有 `Tumor`，用于回答“当前切片是否存在肿瘤、肿瘤大致位于哪里”，并不直接区分 `WT / TC / ET`。当前最优候选检测器为 `workdir_yolo/brats_yolo_dev_img320_v8m`：
 
 - `img320_v8m` 在 Dev 集上达到 `mAP50 = 0.8415`、`mAP50-95 = 0.6312`、`recall = 0.7778`
 - 阈值扫描表明 `conf = 0.05` 时 `slice_recall_any_box = 0.9367`，适合作为“宁可多给框，也尽量不漏层”的工作点
@@ -309,11 +351,34 @@ workdir_xxx/
 
 结论：项目已经取得实质性进展，当前具备“整病例自动提示分割 + 3D 后处理 + 3D 预览”的完整实验链路；在阶段一和阶段二扩展验证后，当前默认 detector 工作点仍建议保持 `conf=0.05, iou=0.60`，当前默认 prompt policy 仍建议保持 `top1`，下一步优化重点应转向 3D 连续性驱动的 prompt 设计，而不是继续单独微调 detector 阈值或当前这版 `top2_merge` 规则。
 
+### 8.5 Web Demo 结果查看与已知边界
+
+当前 `web_demo` 结果页已支持：
+
+- 病例信息与处理状态查看
+- 3D HTML 结果嵌入
+- 2D 关键切片与分割叠加图展示
+- 基于现有分割结果与 spacing 的基础定量分析，例如 `WT / TC / ET` 体积与总体积估计
+
+其中体积计算公式为：
+
+```text
+volume_ml = voxel_count * spacing_x * spacing_y * spacing_z / 1000
+```
+
+已知边界：
+
+- 当前 YOLO 只负责单类肿瘤框检测，不承担 `WT / TC / ET` 分类。
+- `WT / TC / ET` 的类别区分依赖后续分割链路，而不是检测器。
+- `outputs/postprocess_yolo_box_4cases` 中的部分历史样例结果已确认存在 `WT / TC / ET` 三个 mask 文件内容完全相同的情况；此时 `web_demo` 中三类体积会相同，这是对上游结果的忠实读取，不是前端显示错误。
+- 上述历史样例仍可用于流程演示、3D 查看与界面联调，但不宜作为类别级定量分析的依据；若要验证分类别体积，需要先修复推理阶段的类别区分问题并重新生成结果。
+
 ## 9. 注意事项
 
 - `train_singletask.py` 和 `train_multitask.py` 使用的数据格式不同，不能混用。
 - 多任务训练会自动把图像编码器输入层改成 4 通道，以适配 BraTS 四模态输入。
 - `split_raw_data.py` 仍是本地硬编码脚本，不属于当前推荐工作流。
+- `web_demo` 的基础定量分析依赖现有 mask 与 spacing；若结果目录缺少对应文件，页面会降级显示为“暂不可用”。
 - 仓库当前没有独立自动化测试目录，改动后建议至少运行：
 
 ```bash

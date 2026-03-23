@@ -10,6 +10,7 @@ import nibabel as nib
 import numpy as np
 
 from web_demo.config import (
+    DEFAULT_DEMO_MODE,
     GENERATED_IMAGE_DIR,
     OUTPUTS_DIR,
     PIPELINE_SUMMARY_FILE,
@@ -19,6 +20,8 @@ from web_demo.config import (
     SUMMARY_MD_CANDIDATES,
     VIEWER_CANDIDATES,
     ensure_web_demo_dirs,
+    get_demo_mode,
+    normalize_demo_mode,
 )
 
 
@@ -69,6 +72,29 @@ def _read_text(path: Path | None) -> str | None:
         return None
 
 
+def _infer_mode_key(
+    *,
+    requested_mode: str | None,
+    case_meta: dict[str, Any] | None,
+    pipeline_summary: dict[str, Any] | None,
+) -> str:
+    if requested_mode:
+        return normalize_demo_mode(requested_mode)
+
+    meta_mode = ((case_meta or {}).get("web_demo_mode") or {}).get("key")
+    if meta_mode:
+        return normalize_demo_mode(meta_mode)
+
+    pipeline_mode = ((pipeline_summary or {}).get("mode") or {}).get("key")
+    if pipeline_mode:
+        return normalize_demo_mode(pipeline_mode)
+
+    yolo_config = (case_meta or {}).get("yolo_config") or {}
+    if str(yolo_config.get("class_prompt_variant") or "") == "class_boxes_points":
+        return "multiclass"
+    return DEFAULT_DEMO_MODE
+
+
 def _iter_search_dirs(result_dir: Path):
     current = result_dir.resolve()
     outputs_root = OUTPUTS_DIR.resolve()
@@ -90,8 +116,33 @@ def _find_nearest_file(result_dir: Path, candidates: tuple[str, ...]) -> Path | 
     return None
 
 
-def find_viewer_file(result_dir: Path) -> Path | None:
-    for filename in VIEWER_CANDIDATES:
+def _build_viewer_candidates(mode_key: str | None) -> tuple[str, ...]:
+    mode_key = normalize_demo_mode(mode_key)
+    preferred = {
+        "standard": (
+            "preview_3d_compare_WT.html",
+            "preview_3d_WT.html",
+            "preview_3d_compare_combined.html",
+            "preview_3d_combined.html",
+        ),
+        "multiclass": (
+            "preview_3d_compare_all.html",
+            "preview_3d_all.html",
+            "preview_3d_compare_combined.html",
+            "preview_3d_combined.html",
+            "preview_3d_compare_WT.html",
+            "preview_3d_WT.html",
+        ),
+    }
+    seen: list[str] = []
+    for filename in (*preferred.get(mode_key, ()), *VIEWER_CANDIDATES):
+        if filename not in seen:
+            seen.append(filename)
+    return tuple(seen)
+
+
+def find_viewer_file(result_dir: Path, mode_key: str | None = None) -> Path | None:
+    for filename in _build_viewer_candidates(mode_key):
         candidate = result_dir / filename
         if candidate.is_file():
             return candidate
@@ -395,6 +446,37 @@ def _build_quantitative_analysis(result_dir: Path, case_meta: dict[str, Any] | N
         }
     )
 
+    pairwise_equal = {
+        "WT_TC": bool(
+            voxel_counts["WT"] is not None
+            and voxel_counts["TC"] is not None
+            and np.array_equal(mask_volumes.get("WT"), mask_volumes.get("TC"))
+        ),
+        "TC_ET": bool(
+            voxel_counts["TC"] is not None
+            and voxel_counts["ET"] is not None
+            and np.array_equal(mask_volumes.get("TC"), mask_volumes.get("ET"))
+        ),
+        "WT_ET": bool(
+            voxel_counts["WT"] is not None
+            and voxel_counts["ET"] is not None
+            and np.array_equal(mask_volumes.get("WT"), mask_volumes.get("ET"))
+        ),
+    }
+    analysis["pairwise_equal"] = pairwise_equal
+    analysis["all_equal"] = bool(all(pairwise_equal.values()))
+    analysis["hierarchy_order_valid"] = bool(
+        voxel_counts["ET"] is not None
+        and voxel_counts["TC"] is not None
+        and voxel_counts["WT"] is not None
+        and voxel_counts["ET"] <= voxel_counts["TC"] <= voxel_counts["WT"]
+    )
+
+    if analysis["all_equal"]:
+        analysis["notes"].append("当前分区结果差异较小，建议结合整体病灶结果综合查看。")
+    if not analysis["hierarchy_order_valid"]:
+        analysis["notes"].append("当前分区体积关系存在异常，建议结合整体病灶结果审慎解读。")
+
     analysis["display_cards"] = [
         {
             "key": "total",
@@ -550,22 +632,44 @@ def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | Non
     ]
 
 
-def load_result_view(result_id: str) -> dict[str, Any]:
+def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, Any]:
     result_dir = decode_result_id(result_id)
     case_meta = _read_json(result_dir / "case_meta.json")
     pipeline_summary = _read_json(_find_nearest_file(result_dir, (PIPELINE_SUMMARY_FILE,)))
     summary_metrics = _read_json(_find_nearest_file(result_dir, SUMMARY_JSON_CANDIDATES))
     summary_markdown = _read_text(_find_nearest_file(result_dir, SUMMARY_MD_CANDIDATES))
     postprocess_report = _read_json(result_dir / "postprocess_report.json")
+    resolved_mode_key = _infer_mode_key(
+        requested_mode=mode_key,
+        case_meta=case_meta,
+        pipeline_summary=pipeline_summary,
+    )
+    mode = get_demo_mode(resolved_mode_key)
 
     case_id = (case_meta or {}).get("case_id", result_dir.name)
     case_metrics = _extract_case_metrics(summary_metrics, case_id)
-    viewer_file = find_viewer_file(result_dir)
+    viewer_file = find_viewer_file(result_dir, resolved_mode_key)
     slice_images = _generate_slice_gallery(result_dir, result_id, case_meta)
     analysis = _build_quantitative_analysis(result_dir, case_meta)
+    analysis["panel_title"] = str(mode["analysis_title"])
+    analysis["panel_description"] = str(mode["analysis_description"])
+    analysis["display_cards"] = [
+        item for item in analysis["display_cards"] if item["key"] in set(mode["analysis_card_keys"])
+    ]
+    if bool(mode["show_multiclass_details"]):
+        if analysis.get("tc_volume_ml") is None or analysis.get("et_volume_ml") is None:
+            analysis["notes"].append("当前病例的部分分区结果暂不可用，页面已优先展示可用结果。")
+    else:
+        analysis["notes"] = [
+            note for note in analysis["notes"]
+            if "分区结果差异较小" not in note and "分区体积关系存在异常" not in note
+        ]
+        if analysis["available"]:
+            analysis["notes"].append(str(mode["warning_copy"]))
 
     case_info = [
         {"label": "病例编号", "value": str(case_id)},
+        {"label": "查看模式", "value": str(mode["label"])},
         {"label": "结果位置", "value": str(result_dir.resolve())},
     ]
     if case_meta and case_meta.get("shape"):
@@ -575,30 +679,49 @@ def load_result_view(result_id: str) -> dict[str, Any]:
         case_info.append({"label": "体素间距", "value": spacing})
     metric_badges = []
 
+    summary_lines = _build_summary_lines(
+        case_meta=case_meta,
+        pipeline_summary=pipeline_summary,
+        case_metrics=case_metrics,
+        postprocess_report=postprocess_report,
+        summary_markdown=summary_markdown,
+    )
+    if bool(mode["show_multiclass_details"]):
+        summary_lines = [str(mode["warning_copy"]), *summary_lines]
+    else:
+        summary_lines = [str(mode["description"]), *summary_lines]
+
     return {
         "result_id": result_id,
         "case_id": case_id,
+        "mode": {
+            "key": str(mode["key"]),
+            "label": str(mode["label"]),
+            "short_label": str(mode["short_label"]),
+            "description": str(mode["description"]),
+            "show_multiclass_details": bool(mode["show_multiclass_details"]),
+        },
         "viewer_file": viewer_file,
-        "viewer_url": f"/viewer/{result_id}" if viewer_file else None,
+        "viewer_url": f"/viewer/{result_id}?mode={resolved_mode_key}" if viewer_file else None,
+        "viewer_title": str(mode["viewer_title"]),
+        "viewer_description": str(mode["viewer_description"]),
         "case_info": case_info,
         "status_cards": _build_status_cards(result_dir, pipeline_summary),
-        "summary_lines": _build_summary_lines(
-            case_meta=case_meta,
-            pipeline_summary=pipeline_summary,
-            case_metrics=case_metrics,
-            postprocess_report=postprocess_report,
-            summary_markdown=summary_markdown,
-        ),
+        "summary_lines": summary_lines[:4],
+        "summary_title": str(mode["summary_title"]),
+        "summary_description": str(mode["summary_description"]),
         "analysis": analysis,
         "slice_images": slice_images,
+        "slice_title": str(mode["slice_title"]),
+        "slice_description": str(mode["slice_description"]),
         "metric_badges": metric_badges,
-        "note": "页面展示病例信息、处理状态、三维结果与关键切片。",
+        "note": str(mode["result_note"]),
     }
 
 
-def get_viewer_file_for_result(result_id: str) -> Path:
+def get_viewer_file_for_result(result_id: str, mode_key: str | None = None) -> Path:
     result_dir = decode_result_id(result_id)
-    viewer_file = find_viewer_file(result_dir)
+    viewer_file = find_viewer_file(result_dir, mode_key)
     if viewer_file is None:
         raise FileNotFoundError(f"未找到可显示的三维结果: {result_dir}")
     return viewer_file

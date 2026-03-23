@@ -327,6 +327,73 @@ a {
   gap: var(--space-24);
 }
 
+.mode-card {
+  align-content: start;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.98) 0%, rgba(247, 240, 227, 0.72) 100%);
+}
+
+.mode-card.active {
+  border-color: rgba(31, 111, 95, 0.2);
+  box-shadow: 0 18px 40px rgba(31, 111, 95, 0.12);
+}
+
+.mode-selector {
+  display: grid;
+  gap: var(--space-20);
+}
+
+.mode-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-20);
+}
+
+.mode-option-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-16);
+  padding: var(--card-padding-sm);
+  border: 1px solid rgba(31, 42, 36, 0.1);
+  border-radius: 18px;
+  background: #faf8f3;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.mode-option-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(31, 111, 95, 0.14);
+  box-shadow: 0 14px 28px rgba(41, 36, 30, 0.06);
+}
+
+.mode-option-card.active {
+  border-color: rgba(31, 111, 95, 0.24);
+  background: linear-gradient(180deg, #eef7f3 0%, #ffffff 100%);
+  box-shadow: 0 14px 28px rgba(31, 111, 95, 0.1);
+}
+
+.mode-option-card input {
+  margin: 4px 0 0;
+  accent-color: var(--brand);
+}
+
+.mode-option-copy {
+  display: grid;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.mode-option-copy strong {
+  line-height: 1.4;
+}
+
+.mode-option-copy span {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -782,7 +849,8 @@ a {
   .grid.two.wide-left,
   .two-column-grid,
   .content-split-grid,
-  .form-grid {
+  .form-grid,
+  .mode-option-grid {
     grid-template-columns: 1fr;
   }
 

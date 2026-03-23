@@ -1,4 +1,29 @@
 (function () {
+  function preserveModeLinks() {
+    const url = new URL(window.location.href);
+    const mode = url.searchParams.get("mode");
+    if (!mode) {
+      return;
+    }
+
+    document.querySelectorAll("a[href]").forEach((link) => {
+      const href = link.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) {
+        return;
+      }
+      if (!href.startsWith("/")) {
+        return;
+      }
+      if (href.includes("mode=")) {
+        return;
+      }
+
+      const targetUrl = new URL(href, window.location.origin);
+      targetUrl.searchParams.set("mode", mode);
+      link.setAttribute("href", `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`);
+    });
+  }
+
   function initRunForm() {
     const form = document.getElementById("run-form");
     const submitButton = document.getElementById("run-submit");
@@ -133,4 +158,6 @@
     initRunForm,
     initRunWaitPage,
   };
+
+  window.addEventListener("DOMContentLoaded", preserveModeLinks);
 })();

@@ -12,8 +12,9 @@ router = APIRouter()
 
 @router.get("/results/{result_id}", response_class=HTMLResponse)
 def result_page(request: Request, result_id: str) -> HTMLResponse:
+    mode_key = request.query_params.get("mode")
     try:
-        result = load_result_view(result_id)
+        result = load_result_view(result_id, mode_key=mode_key)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -26,15 +27,17 @@ def result_page(request: Request, result_id: str) -> HTMLResponse:
             request,
             title=str(result["case_id"]),
             active_nav="samples",
+            mode_key=str(result["mode"]["key"]),
             result=result,
         ),
     )
 
 
 @router.get("/viewer/{result_id}")
-def viewer_file(result_id: str) -> FileResponse:
+def viewer_file(request: Request, result_id: str) -> FileResponse:
+    mode_key = request.query_params.get("mode")
     try:
-        viewer_path = get_viewer_file_for_result(result_id)
+        viewer_path = get_viewer_file_for_result(result_id, mode_key=mode_key)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(str(viewer_path), media_type="text/html")

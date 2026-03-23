@@ -14,6 +14,7 @@ import numpy as np
 from brats_case import BraTSCase
 from postprocess_3d import postprocess_brats_masks
 from web_demo.config import (
+    DEFAULT_DEMO_MODE,
     DEFAULT_INFERENCE_ARGS,
     DEFAULT_POSTPROCESS_ARGS,
     DEMO_RUNS_DIR,
@@ -22,6 +23,8 @@ from web_demo.config import (
     PROJECT_ROOT,
     UPLOAD_STAGE_DIR,
     ensure_web_demo_dirs,
+    get_demo_mode,
+    normalize_demo_mode,
 )
 from web_demo.services.results import encode_result_id, find_viewer_file
 
@@ -382,6 +385,46 @@ SUMMARY_STEPS = (
 )
 
 
+def _resolve_demo_mode(case_input: dict[str, Any]) -> dict[str, Any]:
+    mode_key = normalize_demo_mode(case_input.get("mode_key"))
+    return get_demo_mode(mode_key)
+
+
+def _build_mode_inference_args(mode_key: str | None) -> dict[str, Any]:
+    mode = get_demo_mode(mode_key)
+    return {
+        **DEFAULT_INFERENCE_ARGS,
+        **dict(mode.get("inference_overrides") or {}),
+    }
+
+
+def _build_mode_postprocess_args(mode_key: str | None) -> dict[str, Any]:
+    mode = get_demo_mode(mode_key)
+    return {
+        **DEFAULT_POSTPROCESS_ARGS,
+        **dict(mode.get("postprocess_overrides") or {}),
+    }
+
+
+def _persist_mode_metadata(result_dir: Path, mode: dict[str, Any]) -> None:
+    case_meta_path = Path(result_dir) / "case_meta.json"
+    if not case_meta_path.is_file():
+        return
+    try:
+        case_meta = json.loads(case_meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    case_meta["web_demo_mode"] = {
+        "key": str(mode["key"]),
+        "label": str(mode["label"]),
+        "short_label": str(mode["short_label"]),
+        "viewer_mask_name": str(mode["viewer_mask_name"]),
+        "show_multiclass_details": bool(mode["show_multiclass_details"]),
+    }
+    _write_json(case_meta_path, case_meta)
+
+
 def _now_text_v2() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -401,11 +444,17 @@ def _build_summary_steps_v2() -> list[dict[str, Any]]:
 
 
 def _init_pipeline_summary_v2(case_input: dict[str, Any], result_dir: Path) -> dict[str, Any]:
+    mode = _resolve_demo_mode(case_input)
     return {
         "run_id": case_input.get("run_id"),
         "case_id": case_input["case_id"],
         "result_dir": str(result_dir.resolve()),
         "log_path": str(Path(case_input.get("log_path", result_dir / "run.log")).resolve()),
+        "mode": {
+            "key": str(mode["key"]),
+            "label": str(mode["label"]),
+            "short_label": str(mode["short_label"]),
+        },
         "source": {
             "type": case_input["source_type"],
             "case_dir": str(case_input["case_dir"]),
@@ -551,7 +600,8 @@ def _run_command(command: list[str], cwd: Path, run_logger: RunLogger | None = N
 
 def run_inference(case_input: dict[str, Any], run_logger: RunLogger | None = None) -> dict[str, Any]:
     result_dir = Path(case_input["result_dir"])
-    args = DEFAULT_INFERENCE_ARGS
+    mode = _resolve_demo_mode(case_input)
+    args = _build_mode_inference_args(mode["key"])
     command = [
         str(PYTHON_EXECUTABLE),
         str(PROJECT_ROOT / "infer_volume.py"),
@@ -593,6 +643,10 @@ def run_inference(case_input: dict[str, Any], run_logger: RunLogger | None = Non
         str(args["yolo_topk"]),
         "--prompt_box_strategy",
         str(args["prompt_box_strategy"]),
+        "--class_prompt_variant",
+        str(args.get("class_prompt_variant", "baseline")),
+        "--et_prompt_variant",
+        str(args.get("et_prompt_variant", "default")),
         "--z_prompt_mode",
         str(args["z_prompt_mode"]),
         "--wt_continuity_enabled",
@@ -600,6 +654,8 @@ def run_inference(case_input: dict[str, Any], run_logger: RunLogger | None = Non
         "--postprocess",
         "false",
     ]
+    if run_logger is not None:
+        run_logger.info(f"当前模式: {mode['label']}")
     completed = _run_command(command, cwd=PROJECT_ROOT, run_logger=run_logger)
     return {"result_dir": result_dir, "stdout": completed["stdout"]}
 
@@ -618,14 +674,17 @@ def run_postprocess(result_dir: Path, run_logger: RunLogger | None = None) -> di
         "TC": _load_binary_mask(result_dir / "TC.nii.gz"),
         "WT": _load_binary_mask(result_dir / "WT.nii.gz"),
     }
+    mode_key = ((case_meta.get("web_demo_mode") or {}).get("key")) if isinstance(case_meta, dict) else None
+    postprocess_args = _build_mode_postprocess_args(mode_key)
+
     processed_volumes, postprocess_report = postprocess_brats_masks(
         class_volumes=class_volumes,
-        closing_radius=DEFAULT_POSTPROCESS_ARGS["closing_radius"],
-        opening_radius=DEFAULT_POSTPROCESS_ARGS["opening_radius"],
-        wt_keep_largest=DEFAULT_POSTPROCESS_ARGS["wt_keep_largest"],
-        keep_topk_tc=DEFAULT_POSTPROCESS_ARGS["keep_topk_tc"],
-        keep_topk_et=DEFAULT_POSTPROCESS_ARGS["keep_topk_et"],
-        z_smooth_iterations=DEFAULT_POSTPROCESS_ARGS["z_smooth_iterations"],
+        closing_radius=postprocess_args["closing_radius"],
+        opening_radius=postprocess_args["opening_radius"],
+        wt_keep_largest=postprocess_args["wt_keep_largest"],
+        keep_topk_tc=postprocess_args["keep_topk_tc"],
+        keep_topk_et=postprocess_args["keep_topk_et"],
+        z_smooth_iterations=postprocess_args["z_smooth_iterations"],
     )
     post_combined_label = _build_combined_label(processed_volumes)
 
@@ -641,7 +700,7 @@ def run_postprocess(result_dir: Path, run_logger: RunLogger | None = None) -> di
     report_path = result_dir / "postprocess_report.json"
     _write_json(report_path, postprocess_report)
 
-    case_meta["postprocess_config"] = {"enabled": True, **DEFAULT_POSTPROCESS_ARGS}
+    case_meta["postprocess_config"] = {"enabled": True, **postprocess_args}
     case_meta["postprocess_report_path"] = str(report_path.resolve())
     _write_json(case_meta_path, case_meta)
 
@@ -653,13 +712,23 @@ def run_postprocess(result_dir: Path, run_logger: RunLogger | None = None) -> di
 
 def run_visualization(result_dir: Path, run_logger: RunLogger | None = None) -> dict[str, Any]:
     result_dir = Path(result_dir)
+    case_meta_path = result_dir / "case_meta.json"
+    if case_meta_path.is_file():
+        try:
+            case_meta = json.loads(case_meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            case_meta = {}
+    else:
+        case_meta = {}
+    mode_key = ((case_meta or {}).get("web_demo_mode") or {}).get("key")
+    mode = get_demo_mode(mode_key)
     command = [
         str(PYTHON_EXECUTABLE),
         str(PROJECT_ROOT / "visualize_case.py"),
         "--output_dir",
         str(result_dir),
         "--mask_name",
-        "all",
+        str(mode["viewer_mask_name"]),
     ]
     completed = _run_command(command, cwd=PROJECT_ROOT, run_logger=run_logger)
     viewer_file = find_viewer_file(result_dir)
@@ -675,9 +744,14 @@ def run_full_pipeline(
     run_logger: RunLogger | None = None,
 ) -> dict[str, Any]:
     ensure_web_demo_dirs()
+    mode = _resolve_demo_mode(case_input)
     result_dir = Path(case_input.get("result_dir") or _build_result_dir(case_input["case_id"])).resolve()
     result_dir.mkdir(parents=True, exist_ok=True)
-    case_input = {**case_input, "result_dir": result_dir}
+    case_input = {
+        **case_input,
+        "mode_key": str(mode["key"]),
+        "result_dir": result_dir,
+    }
     if "log_path" not in case_input:
         case_input["log_path"] = result_dir / "run.log"
 
@@ -690,6 +764,7 @@ def run_full_pipeline(
 
     if run_logger is not None:
         run_logger.info("任务开始")
+        run_logger.info(f"运行模式: {mode['label']}")
         run_logger.info(f"输入路径: {case_input['case_dir']}")
         run_logger.info(f"病例ID: {case_input['case_id']}")
         run_logger.info(f"结果目录: {result_dir}")
@@ -703,6 +778,7 @@ def run_full_pipeline(
         _update_summary_step_v2(summary, current_stage_key, "running", "正在进行自动分割")
         _write_json(summary_path, summary)
         run_inference(case_input, run_logger=run_logger)
+        _persist_mode_metadata(result_dir, mode)
         if run_logger is not None:
             run_logger.info("自动分割完成")
         if run_id is not None:
@@ -782,6 +858,7 @@ def _run_pipeline_job_in_background_v2(run_id: str, case_input: dict[str, Any], 
 
 def start_pipeline_job(case_input: dict[str, Any]) -> dict[str, Any]:
     ensure_web_demo_dirs()
+    mode = _resolve_demo_mode(case_input)
     result_dir = _build_result_dir(case_input["case_id"]).resolve()
     result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -794,9 +871,17 @@ def start_pipeline_job(case_input: dict[str, Any]) -> dict[str, Any]:
         source_type=str(case_input["source_type"]),
         result_dir=result_dir,
         log_path=log_path,
+        mode_key=str(mode["key"]),
+        mode_label=str(mode["label"]),
     )
 
-    case_input = {**case_input, "run_id": run_id, "result_dir": result_dir, "log_path": log_path}
+    case_input = {
+        **case_input,
+        "mode_key": str(mode["key"]),
+        "run_id": run_id,
+        "result_dir": result_dir,
+        "log_path": log_path,
+    }
     run_logger = RunLogger(run_id=run_id, log_path=log_path)
     run_logger.info("任务已创建，等待后台开始执行")
 

@@ -5,12 +5,31 @@
     <section class="hero card hero-card">
       <div class="eyebrow">辅助分析</div>
       <h1>脑肿瘤 MRI 三维可视化与辅助分析</h1>
-      <p class="lead">支持病例导入、自动处理、三维可视化与结果查看。</p>
+      <p class="lead">系统支持稳健默认配置与多类别分割分析两种模式，默认入口为标准模式。</p>
       <div class="hero-actions">
-        <a class="button primary" href="/samples">选择病例</a>
-        <a class="button secondary" href="/run">导入病例并处理</a>
+        <a class="button primary" href="/samples?mode=standard">选择病例</a>
+        <a class="button secondary" href="/run?mode=standard">导入病例并处理</a>
       </div>
       <div class="hero-meta">当前提供 {{ sample_count }} 例可查看病例，可直接进入结果页。</div>
+    </section>
+
+    <section class="card-grid two-column-grid">
+      {% for mode in demo_modes %}
+        <article class="card mode-card{% if mode.key == selected_mode_key %} active{% endif %}">
+          <div class="case-card-top">
+            <span class="pill">{{ mode.label }}</span>
+            {% if mode.key == "standard" %}
+              <span class="muted">默认入口</span>
+            {% endif %}
+          </div>
+          <h2>{{ mode.short_label }}</h2>
+          <p>{{ mode.tagline }}</p>
+          <div class="hero-actions">
+            <a class="button {% if mode.key == 'standard' %}primary{% else %}secondary{% endif %}" href="/run?mode={{ mode.key }}">使用此模式处理病例</a>
+            <a class="button ghost" href="/samples?mode={{ mode.key }}">以此模式查看病例</a>
+          </div>
+        </article>
+      {% endfor %}
     </section>
 
     <section class="card-grid two-column-grid">
@@ -34,20 +53,20 @@
   {% else %}
     <section class="section-heading page-header">
       <div>
-        <div class="eyebrow">病例列表</div>
+        <div class="eyebrow">{{ selected_mode.label }}</div>
         <h1>选择病例</h1>
-        <p>可直接查看已完成处理的病例结果，包括三维可视化与关键切片。</p>
+        <p>{{ selected_mode.description }}</p>
       </div>
-      <a class="button ghost" href="/">返回首页</a>
+      <a class="button ghost" href="/?mode={{ selected_mode_key }}">返回首页</a>
     </section>
 
     <section class="case-grid sample-grid">
       {% if sample_cases %}
         {% for case in sample_cases %}
-          <a class="case-card" href="/results/{{ case.result_id }}">
+          <a class="case-card" href="/results/{{ case.result_id }}?mode={{ selected_mode_key }}">
             <div class="case-card-top">
               <span class="pill">{{ case.source_label }}</span>
-              <span class="muted">{{ case.source_tag }}</span>
+              <span class="muted">{{ selected_mode.short_label }}</span>
             </div>
             <h3>{{ case.case_id }}</h3>
             <p>{{ case.summary }}</p>

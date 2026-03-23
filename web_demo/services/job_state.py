@@ -75,6 +75,8 @@ def create_job(
     source_type: str,
     result_dir: Path,
     log_path: Path,
+    mode_key: str,
+    mode_label: str,
 ) -> dict[str, Any]:
     stages = _build_stage_items()
     stages[0]["state"] = "success"
@@ -85,6 +87,8 @@ def create_job(
         "case_id": case_id,
         "case_dir": str(case_dir),
         "source_type": source_type,
+        "mode_key": mode_key,
+        "mode_label": mode_label,
         "result_dir": str(result_dir),
         "result_id": None,
         "result_url": None,
@@ -142,7 +146,7 @@ def complete_job(run_id: str, *, message: str, result_id: str, result_dir: Path)
         job["current_stage_label"] = STAGE_LABELS["terminal"]
         job["result_id"] = result_id
         job["result_dir"] = str(result_dir)
-        job["result_url"] = f"/results/{result_id}"
+        job["result_url"] = f"/results/{result_id}?mode={job['mode_key']}"
         job["completed_at"] = _now_text()
         _touch(job)
         return deepcopy(job)
