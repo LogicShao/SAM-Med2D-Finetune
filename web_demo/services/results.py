@@ -22,7 +22,9 @@ from web_demo.config import (
     ensure_web_demo_dirs,
     get_demo_mode,
     normalize_demo_mode,
+    resolve_sample_result_mode,
 )
+from visualize_case import render_case
 
 
 COMBINED_MASK_COLORS = {
@@ -36,6 +38,13 @@ CLASS_MASK_CANDIDATES = {
     "TC": ("post_TC.nii.gz", "TC.nii.gz"),
     "ET": ("post_ET.nii.gz", "ET.nii.gz"),
 }
+
+DEFAULT_VIEWER_MASK_BY_MODE = {
+    "standard": "WT",
+    "multiclass": "all",
+}
+
+MULTICLASS_VIEWER_MASKS = ("WT", "TC", "ET")
 
 
 def encode_result_id(result_dir: Path) -> str:
@@ -72,15 +81,12 @@ def _read_text(path: Path | None) -> str | None:
         return None
 
 
-def _infer_mode_key(
+def _detect_result_mode(
+    result_dir: Path,
     *,
-    requested_mode: str | None,
     case_meta: dict[str, Any] | None,
     pipeline_summary: dict[str, Any] | None,
-) -> str:
-    if requested_mode:
-        return normalize_demo_mode(requested_mode)
-
+) -> str | None:
     meta_mode = ((case_meta or {}).get("web_demo_mode") or {}).get("key")
     if meta_mode:
         return normalize_demo_mode(meta_mode)
@@ -89,9 +95,33 @@ def _infer_mode_key(
     if pipeline_mode:
         return normalize_demo_mode(pipeline_mode)
 
-    yolo_config = (case_meta or {}).get("yolo_config") or {}
-    if str(yolo_config.get("class_prompt_variant") or "") == "class_boxes_points":
-        return "multiclass"
+    sample_mode = resolve_sample_result_mode(result_dir)
+    if sample_mode:
+        return normalize_demo_mode(sample_mode)
+    return None
+
+
+def resolve_result_mode(
+    result_dir: Path,
+    *,
+    requested_mode: str | None,
+    case_meta: dict[str, Any] | None,
+    pipeline_summary: dict[str, Any] | None,
+) -> str:
+    requested = normalize_demo_mode(requested_mode) if requested_mode else None
+    actual_mode = _detect_result_mode(
+        result_dir,
+        case_meta=case_meta,
+        pipeline_summary=pipeline_summary,
+    )
+    if requested and actual_mode and requested != actual_mode:
+        if requested == "multiclass":
+            raise FileNotFoundError("\u8be5\u75c5\u4f8b\u6682\u672a\u751f\u6210\u591a\u7c7b\u522b\u5206\u6790\u7ed3\u679c\u3002")
+        raise FileNotFoundError("\u5f53\u524d\u7ed3\u679c\u4e0d\u5c5e\u4e8e\u6807\u51c6\u6a21\u5f0f\u3002")
+    if actual_mode:
+        return actual_mode
+    if requested:
+        return requested
     return DEFAULT_DEMO_MODE
 
 
@@ -116,37 +146,104 @@ def _find_nearest_file(result_dir: Path, candidates: tuple[str, ...]) -> Path | 
     return None
 
 
-def _build_viewer_candidates(mode_key: str | None) -> tuple[str, ...]:
-    mode_key = normalize_demo_mode(mode_key)
-    preferred = {
-        "standard": (
-            "preview_3d_compare_WT.html",
-            "preview_3d_WT.html",
-            "preview_3d_compare_combined.html",
-            "preview_3d_combined.html",
-        ),
-        "multiclass": (
-            "preview_3d_compare_all.html",
-            "preview_3d_all.html",
-            "preview_3d_compare_combined.html",
-            "preview_3d_combined.html",
-            "preview_3d_compare_WT.html",
-            "preview_3d_WT.html",
-        ),
+def _normalize_viewer_mask(mask_name: str | None, mode_key: str) -> str:
+    normalized_mode = normalize_demo_mode(mode_key)
+    if normalized_mode == "standard":
+        return "WT"
+
+    raw_value = str(mask_name or DEFAULT_VIEWER_MASK_BY_MODE[normalized_mode]).strip()
+    if not raw_value or raw_value.lower() == "all":
+        return "all"
+
+    requested_masks = {
+        item.strip().upper()
+        for item in raw_value.replace("+", ",").split(",")
+        if item.strip()
     }
-    seen: list[str] = []
-    for filename in (*preferred.get(mode_key, ()), *VIEWER_CANDIDATES):
-        if filename not in seen:
-            seen.append(filename)
-    return tuple(seen)
+    valid_masks = [mask for mask in MULTICLASS_VIEWER_MASKS if mask in requested_masks]
+    if len(valid_masks) == len(MULTICLASS_VIEWER_MASKS):
+        return "all"
+    if not valid_masks:
+        return DEFAULT_VIEWER_MASK_BY_MODE[normalized_mode]
+    if len(valid_masks) == 1:
+        return valid_masks[0]
+    return ",".join(valid_masks)
 
 
-def find_viewer_file(result_dir: Path, mode_key: str | None = None) -> Path | None:
-    for filename in _build_viewer_candidates(mode_key):
+def _viewer_mask_to_slug(mask_name: str) -> str:
+    normalized = str(mask_name).strip()
+    if normalized.lower() == "all":
+        return "all"
+    if normalized.lower() == "combined":
+        return "combined"
+    parts = [item.strip().lower() for item in normalized.split(",") if item.strip()]
+    return "_".join(parts) if parts else "all"
+
+
+def _viewer_filename_candidates(mask_name: str) -> tuple[str, ...]:
+    slug = _viewer_mask_to_slug(mask_name)
+    return (f"preview_3d_compare_{slug}.html", f"preview_3d_{slug}.html")
+
+
+def _can_render_viewer(result_dir: Path, mask_name: str) -> bool:
+    requested_masks = MULTICLASS_VIEWER_MASKS if mask_name == "all" else tuple(mask_name.split(","))
+    return all(
+        any((result_dir / filename).is_file() for filename in CLASS_MASK_CANDIDATES[mask_name_item])
+        for mask_name_item in requested_masks
+    )
+
+
+def _ensure_viewer_file(result_dir: Path, mask_name: str) -> Path | None:
+    for filename in _viewer_filename_candidates(mask_name):
         candidate = result_dir / filename
         if candidate.is_file():
             return candidate
-    return None
+
+    if not _can_render_viewer(result_dir, mask_name):
+        return None
+
+    save_path = result_dir / f"preview_3d_compare_{_viewer_mask_to_slug(mask_name)}.html"
+    try:
+        render_case(output_dir=result_dir, mask_name=mask_name, save_path=save_path)
+    except Exception:
+        return None
+    return save_path if save_path.is_file() else None
+
+
+def find_viewer_file(
+    result_dir: Path,
+    mode_key: str | None = None,
+    *,
+    mask_name: str | None = None,
+    auto_generate: bool = False,
+) -> Path | None:
+    if mode_key is None and mask_name is None:
+        generic_candidates = (
+            "preview_3d_compare_all.html",
+            "preview_3d_all.html",
+            "preview_3d_compare_WT.html",
+            "preview_3d_WT.html",
+            "preview_3d_compare_TC.html",
+            "preview_3d_TC.html",
+            "preview_3d_compare_ET.html",
+            "preview_3d_ET.html",
+            *VIEWER_CANDIDATES,
+        )
+        for filename in generic_candidates:
+            candidate = result_dir / filename
+            if candidate.is_file():
+                return candidate
+        return None
+
+    resolved_mode = normalize_demo_mode(mode_key)
+    resolved_mask = _normalize_viewer_mask(mask_name, resolved_mode)
+    for filename in _viewer_filename_candidates(resolved_mask):
+        candidate = result_dir / filename
+        if candidate.is_file():
+            return candidate
+    if not auto_generate:
+        return None
+    return _ensure_viewer_file(result_dir, resolved_mask)
 
 
 def _find_mask_path(result_dir: Path) -> Path | None:
@@ -599,7 +696,53 @@ def _normalize_status_detail(detail: Any) -> str:
     return text
 
 
-def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | None) -> list[dict[str, str]]:
+def _build_quantitative_summary(analysis: dict[str, Any], mode_key: str) -> dict[str, Any]:
+    summary = {
+        "available": bool(analysis.get("available")),
+        "total_tumor_volume_ml": analysis.get("total_tumor_volume_ml"),
+        "wt_volume_ml": analysis.get("wt_volume_ml"),
+        "tc_volume_ml": analysis.get("tc_volume_ml") if mode_key == "multiclass" else None,
+        "et_volume_ml": analysis.get("et_volume_ml") if mode_key == "multiclass" else None,
+        "volume_unit": analysis.get("volume_unit", "ml"),
+        "cards": list(analysis.get("display_cards") or []),
+    }
+    return summary
+
+
+def _build_viewer_controls(result_id: str, mode_key: str) -> dict[str, Any]:
+    if mode_key != "multiclass":
+        return {
+            "enabled": False,
+            "strategy": "single-view",
+            "mask_urls": {},
+            "default_mask": "WT",
+        }
+
+    mask_urls = {
+        "all": f"/viewer/{result_id}?mode={mode_key}&mask=all",
+        "WT": f"/viewer/{result_id}?mode={mode_key}&mask=WT",
+        "TC": f"/viewer/{result_id}?mode={mode_key}&mask=TC",
+        "ET": f"/viewer/{result_id}?mode={mode_key}&mask=ET",
+    }
+    return {
+        "enabled": True,
+        "strategy": "plotly-trace-with-fallback",
+        "mask_urls": mask_urls,
+        "default_mask": "all",
+        "labels": {
+            "WT": "\u6574\u4f53\u80bf\u7624\uff08WT\uff09",
+            "TC": "\u80bf\u7624\u6838\u5fc3\uff08TC\uff09",
+            "ET": "\u589e\u5f3a\u533a\uff08ET\uff09",
+        },
+    }
+
+
+def _build_status_cards(
+    result_dir: Path,
+    pipeline_summary: dict[str, Any] | None,
+    *,
+    mode_key: str,
+) -> list[dict[str, str]]:
     if pipeline_summary and pipeline_summary.get("steps"):
         return [
             {
@@ -612,7 +755,11 @@ def _build_status_cards(result_dir: Path, pipeline_summary: dict[str, Any] | Non
 
     raw_ready = all((result_dir / filename).is_file() for filename in RAW_MASK_FILES)
     post_ready = all((result_dir / filename).is_file() for filename in POST_MASK_FILES)
-    viewer_ready = find_viewer_file(result_dir) is not None
+    viewer_mask = DEFAULT_VIEWER_MASK_BY_MODE[normalize_demo_mode(mode_key)]
+    viewer_ready = find_viewer_file(result_dir, mode_key, mask_name=viewer_mask) is not None or _can_render_viewer(
+        result_dir,
+        viewer_mask,
+    )
     return [
         {
             "label": "自动分割",
@@ -639,7 +786,8 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
     summary_metrics = _read_json(_find_nearest_file(result_dir, SUMMARY_JSON_CANDIDATES))
     summary_markdown = _read_text(_find_nearest_file(result_dir, SUMMARY_MD_CANDIDATES))
     postprocess_report = _read_json(result_dir / "postprocess_report.json")
-    resolved_mode_key = _infer_mode_key(
+    resolved_mode_key = resolve_result_mode(
+        result_dir,
         requested_mode=mode_key,
         case_meta=case_meta,
         pipeline_summary=pipeline_summary,
@@ -648,7 +796,8 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
 
     case_id = (case_meta or {}).get("case_id", result_dir.name)
     case_metrics = _extract_case_metrics(summary_metrics, case_id)
-    viewer_file = find_viewer_file(result_dir, resolved_mode_key)
+    viewer_mask = DEFAULT_VIEWER_MASK_BY_MODE[resolved_mode_key]
+    viewer_file = find_viewer_file(result_dir, resolved_mode_key, mask_name=viewer_mask, auto_generate=True)
     slice_images = _generate_slice_gallery(result_dir, result_id, case_meta)
     analysis = _build_quantitative_analysis(result_dir, case_meta)
     analysis["panel_title"] = str(mode["analysis_title"])
@@ -666,6 +815,34 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
         ]
         if analysis["available"]:
             analysis["notes"].append(str(mode["warning_copy"]))
+
+    if bool(mode["show_multiclass_details"]):
+        if analysis.get("tc_volume_ml") is None or analysis.get("et_volume_ml") is None:
+            analysis["notes"] = [
+                note
+                for note in analysis["notes"]
+                if note != "\u5f53\u524d\u75c5\u4f8b\u6682\u672a\u5b8c\u6574\u751f\u6210\u6240\u6709\u5206\u533a\u7ed3\u679c\uff0c\u9875\u9762\u5df2\u4f18\u5148\u5c55\u793a\u53ef\u7528\u5185\u5bb9\u3002"
+            ]
+            analysis["notes"].append(
+                "\u5f53\u524d\u75c5\u4f8b\u6682\u672a\u5b8c\u6574\u751f\u6210\u6240\u6709\u5206\u533a\u7ed3\u679c\uff0c\u9875\u9762\u5df2\u4f18\u5148\u5c55\u793a\u53ef\u7528\u5185\u5bb9\u3002"
+            )
+    else:
+        analysis["notes"] = [
+            note
+            for note in analysis["notes"]
+            if note != str(mode["warning_copy"])
+            and "鍒嗗尯缁撴灉宸紓杈冨皬" not in note
+            and "鍒嗗尯浣撶Н鍏崇郴瀛樺湪寮傚父" not in note
+        ]
+        analysis["tc_volume_ml"] = None
+        analysis["et_volume_ml"] = None
+        analysis["tc_voxels"] = None
+        analysis["et_voxels"] = None
+        analysis["notes"] = [
+            note
+            for note in analysis["notes"]
+            if "TC" not in note and "ET" not in note and "\u5206\u533a" not in note
+        ]
 
     case_info = [
         {"label": "病例编号", "value": str(case_id)},
@@ -687,9 +864,13 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
         summary_markdown=summary_markdown,
     )
     if bool(mode["show_multiclass_details"]):
-        summary_lines = [str(mode["warning_copy"]), *summary_lines]
+        summary_lines = [str(mode["description"]), *summary_lines]
     else:
         summary_lines = [str(mode["description"]), *summary_lines]
+
+    quantitative_summary = _build_quantitative_summary(analysis, resolved_mode_key)
+    viewer_controls = _build_viewer_controls(result_id, resolved_mode_key)
+    viewer_controls["enabled"] = bool(viewer_file) and bool(viewer_controls["enabled"])
 
     return {
         "result_id": result_id,
@@ -701,16 +882,24 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
             "description": str(mode["description"]),
             "show_multiclass_details": bool(mode["show_multiclass_details"]),
         },
+        "supports_multiclass": bool(mode["show_multiclass_details"]),
         "viewer_file": viewer_file,
-        "viewer_url": f"/viewer/{result_id}?mode={resolved_mode_key}" if viewer_file else None,
+        "viewer_path": str(viewer_file.resolve()) if viewer_file else None,
+        "viewer_url": (
+            f"/viewer/{result_id}?mode={resolved_mode_key}&mask={viewer_controls['default_mask']}"
+            if viewer_file
+            else None
+        ),
         "viewer_title": str(mode["viewer_title"]),
         "viewer_description": str(mode["viewer_description"]),
+        "viewer_controls": viewer_controls,
         "case_info": case_info,
-        "status_cards": _build_status_cards(result_dir, pipeline_summary),
+        "status_cards": _build_status_cards(result_dir, pipeline_summary, mode_key=resolved_mode_key),
         "summary_lines": summary_lines[:4],
         "summary_title": str(mode["summary_title"]),
         "summary_description": str(mode["summary_description"]),
         "analysis": analysis,
+        "quantitative_summary": quantitative_summary,
         "slice_images": slice_images,
         "slice_title": str(mode["slice_title"]),
         "slice_description": str(mode["slice_description"]),
@@ -719,9 +908,26 @@ def load_result_view(result_id: str, mode_key: str | None = None) -> dict[str, A
     }
 
 
-def get_viewer_file_for_result(result_id: str, mode_key: str | None = None) -> Path:
+def get_viewer_file_for_result(
+    result_id: str,
+    mode_key: str | None = None,
+    mask_name: str | None = None,
+) -> Path:
     result_dir = decode_result_id(result_id)
-    viewer_file = find_viewer_file(result_dir, mode_key)
+    case_meta = _read_json(result_dir / "case_meta.json")
+    pipeline_summary = _read_json(_find_nearest_file(result_dir, (PIPELINE_SUMMARY_FILE,)))
+    resolved_mode_key = resolve_result_mode(
+        result_dir,
+        requested_mode=mode_key,
+        case_meta=case_meta,
+        pipeline_summary=pipeline_summary,
+    )
+    viewer_file = find_viewer_file(
+        result_dir,
+        resolved_mode_key,
+        mask_name=mask_name,
+        auto_generate=True,
+    )
     if viewer_file is None:
         raise FileNotFoundError(f"未找到可显示的三维结果: {result_dir}")
     return viewer_file

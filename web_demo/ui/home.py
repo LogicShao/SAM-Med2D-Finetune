@@ -35,7 +35,7 @@ def _render_home_template(request: Request, *, title: str, active_nav: str, **co
 @router.get("/", response_class=HTMLResponse)
 def home_page(request: Request) -> HTMLResponse:
     selected_mode_key = normalize_demo_mode(request.query_params.get("mode"))
-    sample_cases = list_sample_cases()
+    sample_cases = list_sample_cases(selected_mode_key)
     return _render_home_template(
         request,
         title="首页",
@@ -60,7 +60,7 @@ def sample_cases_page(request: Request) -> HTMLResponse:
         active_nav="samples",
         mode_key=selected_mode_key,
         page_mode="samples",
-        sample_cases=list_sample_cases(),
+        sample_cases=list_sample_cases(selected_mode_key),
         selected_mode=get_demo_mode(selected_mode_key),
         selected_mode_key=selected_mode_key,
         demo_modes=list_demo_modes(),

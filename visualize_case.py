@@ -40,8 +40,7 @@ def parse_args():
     parser.add_argument(
         "--mask_name",
         default="all",
-        choices=["all", "ET", "TC", "WT", "combined"],
-        help="Mask volume to preview. 'all' renders ET/TC/WT together.",
+        help="Mask volume to preview. Supports all, combined, ET, TC, WT, or comma-separated combinations.",
     )
     parser.add_argument(
         "--save_path",
@@ -60,6 +59,47 @@ def parse_args():
         help="Mesh opacity in the 3D preview.",
     )
     return parser.parse_args()
+
+
+def normalize_mask_name(mask_name):
+    raw_value = str(mask_name or "all").strip()
+    if not raw_value:
+        return "all"
+
+    lowered = raw_value.lower()
+    if lowered in {"all", "combined"}:
+        return lowered
+
+    valid_masks = []
+    seen = set()
+    for item in raw_value.replace("+", ",").split(","):
+        normalized = item.strip().upper()
+        if normalized not in {"ET", "TC", "WT"} or normalized in seen:
+            continue
+        valid_masks.append(normalized)
+        seen.add(normalized)
+
+    if not valid_masks or len(valid_masks) == 3:
+        return "all"
+    if len(valid_masks) == 1:
+        return valid_masks[0]
+    return ",".join(valid_masks)
+
+
+def mask_name_to_slug(mask_name):
+    normalized = normalize_mask_name(mask_name)
+    if normalized in {"all", "combined"}:
+        return normalized
+    return "_".join(part.lower() for part in normalized.split(","))
+
+
+def mask_name_to_title(mask_name):
+    normalized = normalize_mask_name(mask_name)
+    if normalized == "all":
+        return "WT / TC / ET"
+    if normalized == "combined":
+        return "combined"
+    return " + ".join(part for part in normalized.split(","))
 
 
 def load_case_meta(output_dir):
@@ -89,10 +129,13 @@ def resolve_mask_path(output_dir, mask_name, prefix=""):
 
 def has_postprocessed_variant(output_dir, mask_name):
     output_dir = Path(output_dir)
-    if mask_name == "all":
+    normalized = normalize_mask_name(mask_name)
+    if normalized == "all":
         required = [output_dir / f"{POST_PREFIX}{MASK_FILES[class_name]}" for class_name in ("ET", "TC", "WT")]
+    elif normalized == "combined":
+        required = [resolve_mask_path(output_dir, "combined", prefix="post")]
     else:
-        required = [resolve_mask_path(output_dir, mask_name, prefix="post")]
+        required = [resolve_mask_path(output_dir, class_name, prefix="post") for class_name in normalized.split(",")]
     return all(path.is_file() for path in required)
 
 
@@ -122,8 +165,9 @@ def build_traces(output_dir, mask_name, spacing, opacity, prefix="", trace_prefi
     output_dir = Path(output_dir)
     traces = []
     trace_prefix = trace_prefix or ""
+    normalized = normalize_mask_name(mask_name)
 
-    if mask_name == "all":
+    if normalized == "all":
         for class_name in ("ET", "TC", "WT"):
             mask = load_volume(resolve_mask_path(output_dir, class_name, prefix=prefix))
             trace = make_mesh_trace(
@@ -137,7 +181,7 @@ def build_traces(output_dir, mask_name, spacing, opacity, prefix="", trace_prefi
                 traces.append(trace)
         return traces
 
-    if mask_name == "combined":
+    if normalized == "combined":
         combined = load_volume(resolve_mask_path(output_dir, "combined", prefix=prefix))
         for label_value, (label_name, color) in COMBINED_LABELS.items():
             trace = make_mesh_trace(
@@ -151,16 +195,17 @@ def build_traces(output_dir, mask_name, spacing, opacity, prefix="", trace_prefi
                 traces.append(trace)
         return traces
 
-    mask = load_volume(resolve_mask_path(output_dir, mask_name, prefix=prefix))
-    trace = make_mesh_trace(
-        mask=mask > 0,
-        spacing=spacing,
-        name=f"{trace_prefix}{mask_name}",
-        color=CLASS_COLORS[mask_name],
-        opacity=opacity,
-    )
-    if trace is not None:
-        traces.append(trace)
+    for class_name in normalized.split(","):
+        mask = load_volume(resolve_mask_path(output_dir, class_name, prefix=prefix))
+        trace = make_mesh_trace(
+            mask=mask > 0,
+            spacing=spacing,
+            name=f"{trace_prefix}{class_name}",
+            color=CLASS_COLORS[class_name],
+            opacity=opacity,
+        )
+        if trace is not None:
+            traces.append(trace)
     return traces
 
 
@@ -204,6 +249,7 @@ def configure_scene(fig, scene_name):
 
 def render_case(output_dir, mask_name="all", save_path=None, show=False, opacity=0.45):
     output_dir = Path(output_dir)
+    mask_name = normalize_mask_name(mask_name)
     meta = load_case_meta(output_dir)
     report = load_postprocess_report(output_dir)
     spacing = tuple(float(x) for x in meta.get("voxel_spacing", [1.0, 1.0, 1.0]))
@@ -246,7 +292,7 @@ def render_case(output_dir, mask_name="all", save_path=None, show=False, opacity
         fig = go.Figure(data=raw_traces)
         configure_scene(fig, "scene")
 
-    title_text = f"3D preview: {meta['case_id']} ({mask_name})"
+    title_text = f"3D preview: {meta['case_id']} ({mask_name_to_title(mask_name)})"
     report_summary = build_report_summary(report)
     if has_post_variant and report_summary:
         title_text += f"<br><sup>{report_summary}</sup>"
@@ -258,7 +304,8 @@ def render_case(output_dir, mask_name="all", save_path=None, show=False, opacity
     )
 
     if save_path is None:
-        filename = f"preview_3d_compare_{mask_name}.html" if has_post_variant else f"preview_3d_{mask_name}.html"
+        slug = mask_name_to_slug(mask_name)
+        filename = f"preview_3d_compare_{slug}.html" if has_post_variant else f"preview_3d_{slug}.html"
         save_path = output_dir / filename
     else:
         save_path = Path(save_path)

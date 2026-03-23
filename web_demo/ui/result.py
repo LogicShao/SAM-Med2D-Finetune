@@ -36,8 +36,9 @@ def result_page(request: Request, result_id: str) -> HTMLResponse:
 @router.get("/viewer/{result_id}")
 def viewer_file(request: Request, result_id: str) -> FileResponse:
     mode_key = request.query_params.get("mode")
+    mask_name = request.query_params.get("mask")
     try:
-        viewer_path = get_viewer_file_for_result(result_id, mode_key=mode_key)
+        viewer_path = get_viewer_file_for_result(result_id, mode_key=mode_key, mask_name=mask_name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(str(viewer_path), media_type="text/html")

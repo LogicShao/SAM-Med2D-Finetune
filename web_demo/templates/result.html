@@ -98,8 +98,29 @@
         <p>{{ result.viewer_description }}</p>
       </div>
     </div>
+    {% if result.viewer_controls.enabled %}
+      <div
+        class="viewer-control-panel"
+        id="viewer-control-panel"
+        data-default-src="{{ result.viewer_url }}"
+        data-all-src="{{ result.viewer_controls.mask_urls.all }}"
+        data-wt-src="{{ result.viewer_controls.mask_urls.WT }}"
+        data-tc-src="{{ result.viewer_controls.mask_urls.TC }}"
+        data-et-src="{{ result.viewer_controls.mask_urls.ET }}"
+      >
+        <div class="viewer-control-header">
+          <strong>区域显示控制</strong>
+          <span class="muted" id="viewer-control-status">优先使用交互显隐控制。</span>
+        </div>
+        <div class="viewer-control-group">
+          <button class="viewer-toggle is-active" type="button" data-mask="WT" aria-pressed="true">WT：显示</button>
+          <button class="viewer-toggle is-active" type="button" data-mask="TC" aria-pressed="true">TC：显示</button>
+          <button class="viewer-toggle is-active" type="button" data-mask="ET" aria-pressed="true">ET：显示</button>
+        </div>
+      </div>
+    {% endif %}
     {% if result.viewer_url %}
-      <iframe class="viewer-frame" src="{{ result.viewer_url }}" loading="lazy"></iframe>
+      <iframe class="viewer-frame" id="result-viewer-frame" src="{{ result.viewer_url }}" loading="lazy"></iframe>
     {% else %}
       <div class="empty-state compact">
         <h3>暂未生成三维结果</h3>

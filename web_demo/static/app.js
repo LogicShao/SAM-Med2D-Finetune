@@ -154,10 +154,155 @@
     }
   }
 
+  function initResultViewerControls() {
+    const panel = document.getElementById("viewer-control-panel");
+    const iframe = document.getElementById("result-viewer-frame");
+    if (!panel || !iframe) {
+      return;
+    }
+
+    const statusNode = document.getElementById("viewer-control-status");
+    const buttons = Array.from(panel.querySelectorAll(".viewer-toggle"));
+    const state = { WT: true, TC: true, ET: true };
+    let directControlAvailable = null;
+    let fallbackActive = false;
+
+    function activeMasks() {
+      return ["WT", "TC", "ET"].filter((mask) => state[mask]);
+    }
+
+    function updateButtonCopy() {
+      buttons.forEach((button) => {
+        const mask = button.dataset.mask;
+        const isActive = Boolean(state[mask]);
+        button.classList.toggle("is-active", isActive);
+        button.classList.toggle("is-inactive", !isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        button.textContent = `${mask}\uff1a${isActive ? "\u663e\u793a" : "\u9690\u85cf"}`;
+      });
+    }
+
+    function selectionToMaskParam() {
+      const masks = activeMasks();
+      if (masks.length === 3) {
+        return "all";
+      }
+      return masks.join(",");
+    }
+
+    function buildFallbackUrl() {
+      const baseUrl = new URL(panel.dataset.defaultSrc || iframe.src, window.location.origin);
+      baseUrl.searchParams.set("mask", selectionToMaskParam());
+      return `${baseUrl.pathname}${baseUrl.search}${baseUrl.hash}`;
+    }
+
+    function detectTraceMask(traceName) {
+      const text = String(traceName || "").toUpperCase();
+      if (text.includes("WT")) {
+        return "WT";
+      }
+      if (text.includes("TC")) {
+        return "TC";
+      }
+      if (text.includes("ET")) {
+        return "ET";
+      }
+      return null;
+    }
+
+    function tryApplyDirectControl() {
+      try {
+        const frameWindow = iframe.contentWindow;
+        const frameDocument = iframe.contentDocument;
+        const plotly = frameWindow && frameWindow.Plotly;
+        const graph = frameDocument && frameDocument.querySelector(".plotly-graph-div");
+        const traces = graph && (graph.data || graph._fullData);
+        if (!plotly || !graph || !Array.isArray(traces) || !traces.length) {
+          return false;
+        }
+
+        const indices = [];
+        const visibilities = [];
+        traces.forEach((trace, index) => {
+          const mask = detectTraceMask(trace.name);
+          if (!mask) {
+            return;
+          }
+          indices.push(index);
+          visibilities.push(Boolean(state[mask]));
+        });
+        if (!indices.length) {
+          return false;
+        }
+
+        plotly.restyle(graph, { visible: visibilities }, indices);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function applyViewerState() {
+      updateButtonCopy();
+
+      if (directControlAvailable !== false) {
+        const applied = tryApplyDirectControl();
+        if (applied) {
+          directControlAvailable = true;
+          fallbackActive = false;
+          if (statusNode) {
+            statusNode.textContent = "\u5f53\u524d\u4e3a\u4ea4\u4e92\u663e\u9690\u63a7\u5236\u3002";
+          }
+          return;
+        }
+      }
+
+      directControlAvailable = false;
+      const nextUrl = buildFallbackUrl();
+      if (iframe.getAttribute("src") !== nextUrl) {
+        fallbackActive = true;
+        iframe.setAttribute("src", nextUrl);
+      }
+      if (statusNode) {
+        statusNode.textContent =
+          "\u5f53\u524d viewer \u4e0d\u652f\u6301\u76f4\u63a5\u663e\u9690\uff0c\u5df2\u5207\u6362\u4e3a\u5bf9\u5e94\u5206\u533a\u89c6\u56fe\u3002";
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const mask = button.dataset.mask;
+        const activeCount = activeMasks().length;
+        if (state[mask] && activeCount === 1) {
+          return;
+        }
+        state[mask] = !state[mask];
+        applyViewerState();
+      });
+    });
+
+    iframe.addEventListener("load", () => {
+      if (!fallbackActive) {
+        directControlAvailable = tryApplyDirectControl();
+        if (directControlAvailable && statusNode) {
+          statusNode.textContent = "\u5f53\u524d\u4e3a\u4ea4\u4e92\u663e\u9690\u63a7\u5236\u3002";
+        }
+      }
+      fallbackActive = false;
+    });
+
+    updateButtonCopy();
+    window.setTimeout(applyViewerState, 120);
+  }
+
   window.WebDemo = {
     initRunForm,
     initRunWaitPage,
+    initResultViewerControls,
   };
 
-  window.addEventListener("DOMContentLoaded", preserveModeLinks);
+  window.addEventListener("DOMContentLoaded", function () {
+    preserveModeLinks();
+    initResultViewerControls();
+  });
 })();

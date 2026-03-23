@@ -43,6 +43,24 @@ VIEWER_CANDIDATES = (
     "preview_3d_compare_combined.html",
     "preview_3d_combined.html",
 )
+SAMPLE_RESULT_COLLECTIONS = {
+    "standard": (
+        {
+            "label": "病例结果",
+            "tag": "标准模式",
+            "root": OUTPUTS_DIR / "stage7_adapter_verification" / "fixed20_adapter_baseline",
+            "max_cases": 6,
+        },
+    ),
+    "multiclass": (
+        {
+            "label": "病例结果",
+            "tag": "多类别分析",
+            "root": OUTPUTS_DIR / "stage9_et_prompt_tuning" / "fixed20_adapter_class_boxes_points_et_default",
+            "max_cases": 6,
+        },
+    ),
+}
 SUMMARY_JSON_CANDIDATES = ("summary.json", "summary_metrics.json", "metrics.json")
 SUMMARY_MD_CANDIDATES = ("summary.md",)
 METRIC_CANDIDATES = ("summary_metrics.json", "metrics.json", "postprocess_report.json", "prompt_stats.json")
@@ -169,6 +187,21 @@ def get_demo_mode(mode_key: str | None) -> dict[str, object]:
 
 def list_demo_modes() -> list[dict[str, object]]:
     return [get_demo_mode(mode_key) for mode_key in DEMO_MODES]
+
+
+def get_sample_result_collections(mode_key: str | None) -> tuple[dict[str, object], ...]:
+    normalized = normalize_demo_mode(mode_key)
+    return tuple(dict(item) for item in SAMPLE_RESULT_COLLECTIONS.get(normalized, ()))
+
+
+def resolve_sample_result_mode(result_dir: Path) -> str | None:
+    target = Path(result_dir).resolve()
+    for mode_key, collections in SAMPLE_RESULT_COLLECTIONS.items():
+        for collection in collections:
+            root = Path(collection["root"]).resolve()
+            if target == root or root in target.parents:
+                return str(mode_key)
+    return None
 
 
 def ensure_web_demo_dirs() -> None:
