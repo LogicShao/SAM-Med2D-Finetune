@@ -7,10 +7,11 @@ import cv2
 import nibabel as nib
 import numpy as np
 
+from brats_cache import normalize_nonzero_volume
+from brats_constants import BRATS_CLASS_NAMES as CLASS_NAMES
 
 BRATS_MODALITIES = ("t1", "t1ce", "t2", "flair")
 YOLO_MODALITIES = ("t1ce", "t2", "flair")
-CLASS_NAMES = ("ET", "TC", "WT")
 
 
 def _to_json_compatible(value):
@@ -46,23 +47,7 @@ def _find_optional_segmentation_file(case_dir):
 
 
 def _normalize_volume(volume):
-    volume = volume.astype(np.float32, copy=False)
-    mask = volume != 0
-    if not np.any(mask):
-        return np.zeros_like(volume, dtype=np.float32), {"min": 0.0, "max": 0.0, "nonzero_voxels": 0}
-
-    valid_values = volume[mask]
-    min_value = float(valid_values.min())
-    max_value = float(valid_values.max())
-    scale = max(max_value - min_value, 1e-8)
-
-    normalized = np.zeros_like(volume, dtype=np.float32)
-    normalized[mask] = (volume[mask] - min_value) / scale
-    return normalized, {
-        "min": min_value,
-        "max": max_value,
-        "nonzero_voxels": int(mask.sum()),
-    }
+    return normalize_nonzero_volume(volume)
 
 
 def _build_gt_class_volumes(segmentation_volume):

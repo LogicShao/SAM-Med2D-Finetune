@@ -1,4 +1,6 @@
 import os
+from collections import OrderedDict
+from pathlib import Path
 
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
@@ -9,6 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from brats_cache import CACHE_IMAGES_FILENAME, CACHE_SEGMENTATION_FILENAME, validate_cache_case
 
 def get_main_bounding_box(mask_tensor):
     y_indices, x_indices = torch.where(mask_tensor > 0)
@@ -20,28 +23,66 @@ def get_main_bounding_box(mask_tensor):
 
 
 class BraTSDataset(Dataset):
-    def __init__(self, data_path, image_size=256, num_classes=3, mode='train', subset_size=None):
+    def __init__(
+        self,
+        data_path,
+        image_size=256,
+        num_classes=3,
+        mode='train',
+        subset_size=None,
+        cache_root=None,
+        cache_max_cases=0,
+        negative_to_positive_ratio=0.0,
+        negative_prompt_box='zero',
+        sample_seed=42,
+    ):
         self.data_path = data_path
         self.image_size = image_size
         self.num_classes = num_classes
         self.mode = mode
+        self.cache_root = Path(cache_root) if cache_root else None
+        self.cache_max_cases = max(int(cache_max_cases), 0)
+        self.negative_to_positive_ratio = max(float(negative_to_positive_ratio), 0.0)
+        self.negative_prompt_box = str(negative_prompt_box)
+        self.sample_seed = int(sample_seed)
+        self._case_cache = OrderedDict()
+        self._cache_metadata = {}
+
+        if self.negative_prompt_box not in {'zero', 'random'}:
+            raise ValueError("negative_prompt_box must be 'zero' or 'random'.")
 
         self.patients = sorted([p for p in os.listdir(data_path) if os.path.isdir(os.path.join(data_path, p))])
+        if self.cache_root is not None:
+            for patient_id in self.patients:
+                self._cache_metadata[patient_id] = validate_cache_case(self.cache_root, patient_id)["metadata"]
 
         self.slice_list = []
-        # print(f"Preprocessing BraTS {self.mode} dataset to find valid slices...")
+        positive_count = 0
+        negative_count = 0
+        rng = np.random.default_rng(self.sample_seed)
         for patient_id in self.patients:
-            patient_folder = os.path.join(self.data_path, patient_id)
-            seg_path = os.path.join(patient_folder, f'{patient_id}_seg.nii.gz')
-            if os.path.exists(seg_path):
-                seg_vol = sitk.GetArrayFromImage(sitk.ReadImage(seg_path))
-                for slice_idx in range(seg_vol.shape[0]):
-                    if np.sum(seg_vol[slice_idx, :, :]) > 0:
-                        self.slice_list.append((patient_id, slice_idx))
+            seg_vol = self._load_segmentation_for_index(patient_id)
+            positive_indices = np.flatnonzero(np.any(seg_vol > 0, axis=(1, 2))).tolist()
+            negative_indices = np.flatnonzero(~np.any(seg_vol > 0, axis=(1, 2))).tolist()
+            self.slice_list.extend((patient_id, int(slice_idx)) for slice_idx in positive_indices)
+            positive_count += len(positive_indices)
+
+            selected_negative_count = min(
+                len(negative_indices),
+                int(round(len(positive_indices) * self.negative_to_positive_ratio)),
+            )
+            if selected_negative_count > 0:
+                selected_negative_indices = rng.choice(negative_indices, size=selected_negative_count, replace=False)
+                self.slice_list.extend((patient_id, int(slice_idx)) for slice_idx in selected_negative_indices)
+                negative_count += selected_negative_count
 
         if subset_size is not None:
             self.slice_list = self.slice_list[:subset_size]
-        print(f"Found {len(self.slice_list)} valid slices for {self.mode} set.")
+        print(
+            f"Found {len(self.slice_list)} slices for {self.mode} set "
+            f"(source_positive={positive_count}, source_negative={negative_count}, "
+            f"cache={'enabled' if self.cache_root else 'disabled'})."
+        )
 
         # --- 数据增强 Transform ---
         if self.mode == 'train':
@@ -54,7 +95,9 @@ class BraTSDataset(Dataset):
                     scale=(1 - 0.1, 1 + 0.1),  # 对应 scale_limit
                     rotate=(-15, 15),  # 对应 rotate_limit
                     p=0.7,
-                    border_mode=cv2.BORDER_CONSTANT
+                    mode=cv2.BORDER_CONSTANT,
+                    cval=0,
+                    cval_mask=0,
                 ),
                 A.RandomBrightnessContrast(p=0.5),
                 A.ElasticTransform(p=0.5, border_mode=cv2.BORDER_CONSTANT),
@@ -66,24 +109,81 @@ class BraTSDataset(Dataset):
     def __len__(self):
         return len(self.slice_list)
 
+    def _cache_paths(self, patient_id):
+        if self.cache_root is None:
+            return None, None
+        case_cache_dir = self.cache_root / patient_id
+        return case_cache_dir / CACHE_IMAGES_FILENAME, case_cache_dir / CACHE_SEGMENTATION_FILENAME
+
+    def _load_segmentation_for_index(self, patient_id):
+        _, cached_seg_path = self._cache_paths(patient_id)
+        if cached_seg_path is not None:
+            if not cached_seg_path.is_file():
+                raise FileNotFoundError(f"Missing cached segmentation for {patient_id}: {cached_seg_path}")
+            return np.load(str(cached_seg_path), mmap_mode='r')
+
+        patient_folder = os.path.join(self.data_path, patient_id)
+        seg_path = os.path.join(patient_folder, f'{patient_id}_seg.nii.gz')
+        if not os.path.exists(seg_path):
+            raise FileNotFoundError(f"Missing segmentation for {patient_id}: {seg_path}")
+        return sitk.GetArrayFromImage(sitk.ReadImage(seg_path))
+
+    def _load_cached_case(self, patient_id):
+        if patient_id in self._case_cache:
+            self._case_cache.move_to_end(patient_id)
+            return self._case_cache[patient_id]
+
+        images_path, segmentation_path = self._cache_paths(patient_id)
+        if images_path is None or not images_path.is_file() or not segmentation_path.is_file():
+            raise FileNotFoundError(f"Missing cached case files for {patient_id} under {self.cache_root}")
+        cached_case = {
+            'images': np.load(str(images_path), mmap_mode='r'),
+            'segmentation': np.load(str(segmentation_path), mmap_mode='r'),
+        }
+        if self.cache_max_cases > 0:
+            self._case_cache[patient_id] = cached_case
+            while len(self._case_cache) > self.cache_max_cases:
+                self._case_cache.popitem(last=False)
+        return cached_case
+
+    def _random_negative_box(self, height, width, sample_index, class_index):
+        rng = np.random.default_rng(self.sample_seed + sample_index * 31 + class_index)
+        box_width = max(4, int(round(width * rng.uniform(0.10, 0.45))))
+        box_height = max(4, int(round(height * rng.uniform(0.10, 0.45))))
+        x_min = int(rng.integers(0, max(width - box_width + 1, 1)))
+        y_min = int(rng.integers(0, max(height - box_height + 1, 1)))
+        return torch.tensor([x_min, y_min, x_min + box_width - 1, y_min + box_height - 1], dtype=torch.float32)
+
     def __getitem__(self, idx):
         patient_id, slice_idx = self.slice_list[idx]
         patient_folder = os.path.join(self.data_path, patient_id)
 
-        modalities = ['t1', 't1ce', 't2', 'flair']
-        image_channels = []
-        for mod in modalities:
-            mod_path = os.path.join(patient_folder, f'{patient_id}_{mod}.nii.gz')
-            mod_vol = sitk.GetArrayFromImage(sitk.ReadImage(mod_path))
-            slice_2d = mod_vol[slice_idx, :, :]
-            slice_2d = (slice_2d - np.min(slice_2d)) / (np.max(slice_2d) - np.min(slice_2d) + 1e-8)
-            slice_2d = cv2.resize(slice_2d, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
-            image_channels.append(slice_2d)
-        image = np.stack(image_channels, axis=0)  # Shape: (4, H, W)
+        if self.cache_root is not None:
+            cached_case = self._load_cached_case(patient_id)
+            image = np.asarray(cached_case['images'][:, slice_idx, :, :], dtype=np.float32)
+            seg_slice = np.asarray(cached_case['segmentation'][slice_idx, :, :])
+            image = np.stack(
+                [
+                    cv2.resize(channel, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
+                    for channel in image
+                ],
+                axis=0,
+            )
+        else:
+            modalities = ['t1', 't1ce', 't2', 'flair']
+            image_channels = []
+            for mod in modalities:
+                mod_path = os.path.join(patient_folder, f'{patient_id}_{mod}.nii.gz')
+                mod_vol = sitk.GetArrayFromImage(sitk.ReadImage(mod_path))
+                slice_2d = mod_vol[slice_idx, :, :]
+                slice_2d = (slice_2d - np.min(slice_2d)) / (np.max(slice_2d) - np.min(slice_2d) + 1e-8)
+                slice_2d = cv2.resize(slice_2d, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
+                image_channels.append(slice_2d)
+            image = np.stack(image_channels, axis=0)
 
-        seg_path = os.path.join(patient_folder, f'{patient_id}_seg.nii.gz')
-        seg_vol = sitk.GetArrayFromImage(sitk.ReadImage(seg_path))
-        seg_slice = seg_vol[slice_idx, :, :]
+            seg_path = os.path.join(patient_folder, f'{patient_id}_seg.nii.gz')
+            seg_vol = sitk.GetArrayFromImage(sitk.ReadImage(seg_path))
+            seg_slice = seg_vol[slice_idx, :, :]
         seg_slice = cv2.resize(seg_slice, (self.image_size, self.image_size), interpolation=cv2.INTER_NEAREST)
         wt_mask = np.isin(seg_slice, [1, 2, 4]).astype(np.float32)
         tc_mask = np.isin(seg_slice, [1, 4]).astype(np.float32)
@@ -100,6 +200,11 @@ class BraTSDataset(Dataset):
         boxes = []
         for i in range(self.num_classes):
             box = get_main_bounding_box(torch.from_numpy(label[i]))
+            if (
+                self.negative_prompt_box == 'random'
+                and not np.any(label)
+            ):
+                box = self._random_negative_box(self.image_size, self.image_size, idx, i)
             boxes.append(box)
         boxes_tensor = torch.stack(boxes, dim=0)
 
