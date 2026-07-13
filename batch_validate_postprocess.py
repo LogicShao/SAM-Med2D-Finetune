@@ -8,22 +8,26 @@ import nibabel as nib
 import numpy as np
 import torch
 
+from brats_metrics import evaluate_brats_case, mean_defined
 from brats_case import BraTSCase
-from infer_volume import (
-    CLASS_NAMES,
+from brats_constants import BRATS_CLASS_NAMES as CLASS_NAMES
+from cli_utils import resolve_torch_device, str_to_bool
+from inference_config import (
     DEFAULT_YOLO_CHECKPOINT,
     PROMPT_BOX_STRATEGIES,
+    build_postprocess_config,
+    build_yolo_prompt_config,
+)
+from inference_io import (
     build_case_meta,
     build_combined_label,
-    build_postprocess_config,
-    build_prompt_provider,
-    build_yolo_prompt_config,
-    run_volume_inference,
-    resolve_torch_device,
     save_case_meta,
     save_json,
     save_mask_outputs,
-    str_to_bool,
+)
+from infer_volume import (
+    build_prompt_provider,
+    run_volume_inference,
 )
 from model_factory import load_multitask_model
 from postprocess_3d import postprocess_brats_masks
@@ -34,11 +38,9 @@ from prompt_strategies import (
     merge_prompt_source_counts,
     summarize_consistency_across_cases,
 )
-from visualize_case import render_case
 
 
 LOGGER = logging.getLogger(__name__)
-EPSILON = 1e-7
 
 
 def parse_args():
@@ -58,6 +60,7 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
+    parser.add_argument("--disable_cudnn", type=str_to_bool, default=False)
     parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
     parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--yolo_iou", type=float, default=0.60)
@@ -100,6 +103,7 @@ def parse_args():
         help="Mask configuration used for the preview HTML.",
     )
     parser.add_argument("--html_opacity", type=float, default=0.45)
+    parser.add_argument("--render_html", type=str_to_bool, default=True)
     return parser.parse_args()
 
 
@@ -127,46 +131,14 @@ def load_ground_truth_masks(case_dir):
     if not seg_path.is_file():
         raise FileNotFoundError(f"Ground-truth segmentation not found: {seg_path}")
 
-    seg_volume = np.asarray(nib.load(str(seg_path)).dataobj, dtype=np.int16)
-    return {
+    segmentation_image = nib.load(str(seg_path))
+    seg_volume = np.asarray(segmentation_image.dataobj, dtype=np.int16)
+    masks = {
         "ET": (seg_volume == 4).astype(np.uint8),
         "TC": np.isin(seg_volume, [1, 4]).astype(np.uint8),
         "WT": np.isin(seg_volume, [1, 2, 4]).astype(np.uint8),
     }
-
-
-def compute_binary_metrics(pred_mask, gt_mask):
-    pred = np.asarray(pred_mask).astype(bool, copy=False)
-    gt = np.asarray(gt_mask).astype(bool, copy=False)
-
-    intersection = int(np.count_nonzero(pred & gt))
-    pred_voxels = int(np.count_nonzero(pred))
-    gt_voxels = int(np.count_nonzero(gt))
-    union = pred_voxels + gt_voxels - intersection
-
-    dice = (2.0 * intersection + EPSILON) / (pred_voxels + gt_voxels + EPSILON)
-    iou = (intersection + EPSILON) / (union + EPSILON)
-    return {
-        "dice": float(dice),
-        "iou": float(iou),
-        "pred_voxels": pred_voxels,
-        "gt_voxels": gt_voxels,
-        "intersection": intersection,
-    }
-
-
-def evaluate_case_metrics(class_volumes, gt_masks):
-    per_class = {}
-    for class_name in CLASS_NAMES:
-        per_class[class_name] = compute_binary_metrics(class_volumes[class_name], gt_masks[class_name])
-
-    mean_dice = float(np.mean([per_class[class_name]["dice"] for class_name in CLASS_NAMES]))
-    mean_iou = float(np.mean([per_class[class_name]["iou"] for class_name in CLASS_NAMES]))
-    return {
-        "per_class": per_class,
-        "mean_dice": mean_dice,
-        "mean_iou": mean_iou,
-    }
+    return masks, tuple(float(value) for value in segmentation_image.header.get_zooms()[:3])
 
 
 def summarize_results(results):
@@ -175,8 +147,8 @@ def summarize_results(results):
 
     summary = {
         "num_cases": len(results),
-        "raw": {"mean_dice": 0.0, "mean_iou": 0.0, "per_class": {}},
-        "post": {"mean_dice": 0.0, "mean_iou": 0.0, "per_class": {}},
+        "raw": {"mean_dice": 0.0, "mean_iou": 0.0, "per_class": {}, "hierarchy": {}},
+        "post": {"mean_dice": 0.0, "mean_iou": 0.0, "per_class": {}, "hierarchy": {}},
         "delta": {"mean_dice": 0.0, "mean_iou": 0.0, "per_class": {}},
     }
 
@@ -184,10 +156,26 @@ def summarize_results(results):
         summary[mode]["mean_dice"] = float(np.mean([item[mode]["mean_dice"] for item in results]))
         summary[mode]["mean_iou"] = float(np.mean([item[mode]["mean_iou"] for item in results]))
         for class_name in CLASS_NAMES:
-            summary[mode]["per_class"][class_name] = {
-                "dice": float(np.mean([item[mode]["per_class"][class_name]["dice"] for item in results])),
-                "iou": float(np.mean([item[mode]["per_class"][class_name]["iou"] for item in results])),
+            class_metrics = {
+                metric_name: mean_defined(
+                    [item[mode]["per_class"][class_name][metric_name] for item in results]
+                )
+                for metric_name in ("dice", "iou", "hd95_mm", "sensitivity", "specificity")
             }
+            class_metrics["empty_ground_truth_cases"] = sum(
+                item[mode]["per_class"][class_name]["empty_region"] in {"both_empty", "ground_truth_empty"}
+                for item in results
+            )
+            summary[mode]["per_class"][class_name] = class_metrics
+        summary[mode]["hierarchy"] = {
+            "et_outside_tc_voxels": sum(item[mode]["hierarchy"]["et_outside_tc_voxels"] for item in results),
+            "tc_outside_wt_voxels": sum(item[mode]["hierarchy"]["tc_outside_wt_voxels"] for item in results),
+            "any_violation_voxels": sum(item[mode]["hierarchy"]["any_violation_voxels"] for item in results),
+            "violation_case_count": sum(item[mode]["hierarchy"]["has_violation"] for item in results),
+        }
+        summary[mode]["hierarchy"]["violation_case_rate"] = (
+            summary[mode]["hierarchy"]["violation_case_count"] / len(results)
+        )
 
     summary["delta"]["mean_dice"] = summary["post"]["mean_dice"] - summary["raw"]["mean_dice"]
     summary["delta"]["mean_iou"] = summary["post"]["mean_iou"] - summary["raw"]["mean_iou"]
@@ -231,7 +219,7 @@ def build_summary_row(case_result):
     row = {
         "case_id": case_result["case_id"],
         "output_dir": case_result["output_dir"],
-        "html_path": case_result["html_path"],
+        "html_path": case_result["html_path"] or "",
         "raw_mean_dice": case_result["raw"]["mean_dice"],
         "raw_mean_iou": case_result["raw"]["mean_iou"],
         "post_mean_dice": case_result["post"]["mean_dice"],
@@ -250,6 +238,14 @@ def build_summary_row(case_result):
         row[f"delta_iou_{class_name}"] = (
             case_result["post"]["per_class"][class_name]["iou"] - case_result["raw"]["per_class"][class_name]["iou"]
         )
+        for mode in ("raw", "post"):
+            for metric_name in ("hd95_mm", "sensitivity", "specificity", "pred_voxels", "gt_voxels"):
+                row[f"{mode}_{metric_name}_{class_name}"] = case_result[mode]["per_class"][class_name][metric_name]
+            row[f"{mode}_empty_region_{class_name}"] = case_result[mode]["per_class"][class_name]["empty_region"]
+    row["raw_hierarchy_et_outside_tc_voxels"] = case_result["raw"]["hierarchy"]["et_outside_tc_voxels"]
+    row["raw_hierarchy_tc_outside_wt_voxels"] = case_result["raw"]["hierarchy"]["tc_outside_wt_voxels"]
+    row["post_hierarchy_et_outside_tc_voxels"] = case_result["post"]["hierarchy"]["et_outside_tc_voxels"]
+    row["post_hierarchy_tc_outside_wt_voxels"] = case_result["post"]["hierarchy"]["tc_outside_wt_voxels"]
     return row
 
 
@@ -430,7 +426,11 @@ def write_summary_markdown(output_path, summary):
     ])
 
     for case_result in cases:
-        html_rel = _relative_path(case_result["html_path"], output_root)
+        html_path = case_result["html_path"]
+        preview_link = "-"
+        if html_path:
+            html_rel = _relative_path(html_path, output_root).replace(chr(92), "/")
+            preview_link = f"[preview]({html_rel})"
         lines.append(
             f"| {case_result['case_id']} | "
             f"{_format_metric(case_result['raw']['mean_dice'])} | "
@@ -439,7 +439,7 @@ def write_summary_markdown(output_path, summary):
             f"{_format_metric(case_result['raw']['mean_iou'])} | "
             f"{_format_metric(case_result['post']['mean_iou'])} | "
             f"{_format_metric(case_result['post']['mean_iou'] - case_result['raw']['mean_iou'])} | "
-            f"[preview]({html_rel.replace(chr(92), '/')}) |"
+            f"{preview_link} |"
         )
 
     for case_result in cases:
@@ -462,9 +462,10 @@ def write_summary_markdown(output_path, summary):
                 f"{_format_metric(post_metrics['iou'])} | "
                 f"{_format_metric(post_metrics['iou'] - raw_metrics['iou'])} |"
             )
-        html_rel = _relative_path(case_result["html_path"], output_root).replace("\\", "/")
-        lines.append("")
-        lines.append(f"- 3D Preview: [{html_rel}]({html_rel})")
+        if case_result["html_path"]:
+            html_rel = _relative_path(case_result["html_path"], output_root).replace("\\", "/")
+            lines.append("")
+            lines.append(f"- 3D Preview: [{html_rel}]({html_rel})")
         wt_continuity = case_result.get("wt_continuity")
         if wt_continuity:
             wt_summary = wt_continuity.get("summary") or {}
@@ -598,17 +599,21 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
     )
     save_case_meta(brats_case, output_dir, initial_meta)
 
-    html_path, _ = render_case(
-        output_dir=output_dir,
-        mask_name=args.html_mask_name,
-        save_path=None,
-        show=False,
-        opacity=args.html_opacity,
-    )
+    html_path = None
+    if args.render_html:
+        from visualize_case import render_case
 
-    gt_masks = load_ground_truth_masks(case_dir)
-    raw_metrics = evaluate_case_metrics(class_volumes, gt_masks)
-    post_metrics = evaluate_case_metrics(postprocessed_volumes, gt_masks)
+        html_path, _ = render_case(
+            output_dir=output_dir,
+            mask_name=args.html_mask_name,
+            save_path=None,
+            show=False,
+            opacity=args.html_opacity,
+        )
+
+    gt_masks, spacing_mm = load_ground_truth_masks(case_dir)
+    raw_metrics = evaluate_brats_case(class_volumes, gt_masks, spacing_mm)
+    post_metrics = evaluate_brats_case(postprocessed_volumes, gt_masks, spacing_mm)
     if hasattr(prompt_provider, "build_case_prompt_report"):
         prompt_report = prompt_provider.build_case_prompt_report(brats_case, gt_masks=gt_masks)
         prompt_report["config"] = build_yolo_prompt_config(
@@ -699,7 +704,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
     return {
         "case_id": brats_case.case_id,
         "output_dir": str(output_dir.resolve()),
-        "html_path": str(Path(html_path).resolve()),
+        "html_path": str(Path(html_path).resolve()) if html_path else None,
         "raw": raw_metrics,
         "post": post_metrics,
         "prompt_report_path": str(prompt_report_path.resolve()) if prompt_report_path else None,
@@ -707,12 +712,19 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
         "raw_consistency": inference_report["raw_consistency"],
         "post_consistency": inference_report.get("post_consistency"),
         "prompt_summary": inference_report["prompt_summary"],
+        "evaluation_grid": {
+            "shape": list(brats_case.shape),
+            "spacing_mm": list(spacing_mm),
+            "prediction_resampled": False,
+        },
     }
 
 
 def main():
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if args.disable_cudnn:
+        torch.backends.cudnn.enabled = False
 
     case_dirs = select_case_dirs(args.cases_root, case_ids=args.case_ids, max_cases=args.max_cases)
     output_root = Path(args.output_root)
@@ -792,6 +804,8 @@ def main():
             "image_size": args.image_size,
             "threshold": args.threshold,
             "device": str(device),
+            "use_amp": bool(args.use_amp),
+            "cudnn_enabled": bool(torch.backends.cudnn.enabled),
             "yolo_checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
             "yolo_conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
             "yolo_iou": float(args.yolo_iou) if args.prompt_mode == "yolo_box" else None,
@@ -838,6 +852,12 @@ def main():
                 z_smooth_iterations=args.z_smooth_iterations,
             ),
             "html_mask_name": args.html_mask_name,
+            "render_html": bool(args.render_html),
+            "metric_contract": {
+                "schema_version": 1,
+                "grid_policy": "Predictions must match the native ground-truth grid; this SAM path writes native-grid masks.",
+                "empty_mask_policy": "Both-empty Dice/IoU are 1; one-sided empty Dice/IoU are 0; HD95 is null when a surface is absent.",
+            },
         },
         "aggregate": summarize_results(results),
         "aggregate_wt_continuity": summarize_wt_continuity(results),

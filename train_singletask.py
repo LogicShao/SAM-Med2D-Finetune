@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from DataLoader import SAMDataset, custom_collate_fn
+from cli_utils import str_to_bool
 from metrics import SegMetrics
 from segment_anything import sam_model_registry
 from utils import FocalDiceloss_IoULoss, get_logger
@@ -37,7 +38,7 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument('--lora_target_modules', nargs='+', default=['qkv'],
                         help='应用 LoRA 的目标层。对于 SAM ViT，通常是 "qkv"。')
-    parser.add_argument("--encoder_adapter", type=bool, default=True)
+    parser.add_argument("--encoder_adapter", type=str_to_bool, default=True)
     parser.add_argument("--use_amp", action='store_true', help="启用自动混合精度训练 (AMP)", default=True)
     args = parser.parse_args()
     args.run_name = f"{args.run_name}_{args.finetune_method}"
@@ -151,23 +152,8 @@ def main(args):
     logger.info(f"Automatic Mixed Precision (AMP) enabled: {is_amp_enabled}")
 
     model = sam_model_registry[args.model_type](args).to(args.device)
-
-    if args.sam_checkpoint and os.path.isfile(args.sam_checkpoint):
-        try:
-            with open(args.sam_checkpoint, "rb") as f:
-                state_dict = torch.load(f, map_location=args.device, weights_only=False)
-                if 'model' in state_dict:
-                    state_dict = state_dict['model']
-                model.load_state_dict(state_dict, strict=False)
-            logger.info(f"成功加载预训练权重: {args.sam_checkpoint}")
-            print(f"成功加载预训练权重: {args.sam_checkpoint}")
-        except Exception as e:
-            logger.error("加载权重失败! 详细错误信息如下:")
-            logger.error(e)
-            print("加载权重失败，详情请查看日志文件。")
-    else:
-        logger.warning("未提供或找不到预训练权重。")
-        print("警告: 未提供预训练权重。")
+    logger.info("成功加载预训练权重: %s", args.sam_checkpoint)
+    print(f"成功加载预训练权重: {args.sam_checkpoint}")
 
     if args.finetune_method == 'lora':
         logger.info("应用 LoRA 配置...")

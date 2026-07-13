@@ -123,10 +123,13 @@ def _build_sam(
                     sam.load_state_dict(state_dict, False)
                 else:
                     sam.load_state_dict(state_dict)
-        except:
+        except RuntimeError as load_error:
             print('*******interpolate')
-            new_state_dict = load_from(sam, state_dict, image_size, vit_patch_size)
-            sam.load_state_dict(new_state_dict)
+            try:
+                new_state_dict = load_from(sam, state_dict, image_size, vit_patch_size)
+                sam.load_state_dict(new_state_dict)
+            except (KeyError, RuntimeError) as interpolation_error:
+                raise RuntimeError(f"Unable to load SAM checkpoint: {checkpoint}") from load_error
         print(f"*******load {checkpoint}")
 
     return sam

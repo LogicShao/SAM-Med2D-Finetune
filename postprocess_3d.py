@@ -4,9 +4,9 @@ import numpy as np
 from scipy import ndimage
 from skimage.measure import label as connected_components
 
+from brats_constants import BRATS_CLASS_NAMES as CLASS_NAMES
 
 LOGGER = logging.getLogger(__name__)
-CLASS_NAMES = ("ET", "TC", "WT")
 
 
 def _as_bool_mask(mask):

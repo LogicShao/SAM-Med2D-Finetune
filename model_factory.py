@@ -65,13 +65,6 @@ def build_multitask_base_model(
     )
     model = sam_model_registry[model_type](build_args)
 
-    if sam_checkpoint:
-        state_dict = _load_checkpoint(sam_checkpoint)
-        try:
-            model.load_state_dict(state_dict, strict=False)
-        except RuntimeError:
-            pass
-
     _replace_patch_embed(model, input_channels)
     return model
 

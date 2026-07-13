@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from DataLoader import SAMDataset
+from cli_utils import str_to_bool
 from metrics import SegMetrics
 from segment_anything import sam_model_registry
 from utils import FocalDiceloss_IoULoss, get_logger
@@ -99,25 +100,9 @@ def main(args):
 
     # 1. 加载模型
     print("正在加载原始 SAM-Med2D 模型...")
-    # 同样地，我们将模型创建和权重加载分开
     model = sam_model_registry[args.model_type](args).to(args.device)
-    if args.sam_checkpoint and os.path.isfile(args.sam_checkpoint):
-        try:
-            with open(args.sam_checkpoint, "rb") as f:
-                state_dict = torch.load(f, map_location=args.device, weights_only=False)
-                if 'model' in state_dict:
-                    state_dict = state_dict['model']
-                model.load_state_dict(state_dict, strict=False)
-            print(f"成功加载预训练权重: {args.sam_checkpoint}")
-            logger.info(f"成功加载预训练权重: {args.sam_checkpoint}")
-        except Exception as e:
-            print(f"加载权重失败: {e}")
-            logger.error(f"加载权重失败: {e}")
-            return  # 如果权重加载失败，则无法进行评估
-    else:
-        print("错误：找不到指定的模型权重文件。")
-        logger.error("错误：找不到指定的模型权重文件。")
-        return
+    print(f"成功加载预训练权重: {args.sam_checkpoint}")
+    logger.info("成功加载预训练权重: %s", args.sam_checkpoint)
 
     # 2. 初始化损失函数
     criterion = FocalDiceloss_IoULoss()
@@ -165,7 +150,7 @@ if __name__ == '__main__':
                         help="预训练 SAM-Med2D 权重路径")
     parser.add_argument('--device', type=str, default='cuda', help="设备 (e.g., 'cuda', 'cpu')")
     parser.add_argument("--use_amp", action='store_true', help="在评估时启用混合精度以加速", default=True)
-    parser.add_argument("--encoder_adapter", type=bool, default=True,
+    parser.add_argument("--encoder_adapter", type=str_to_bool, default=True,
                         help="模型是否包含 Adapter 层 (与 SAM-Med2D 保持一致)")
 
     args = parser.parse_args()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -14,12 +16,29 @@ from torch.nn import functional as F
 from tqdm import tqdm
 
 from brats_case import BraTSCase
+from brats_constants import BRATS_CLASS_NAMES as CLASS_NAMES, PREDICTION_CLASS_ORDER
+from cli_utils import resolve_torch_device, str_to_bool
+from inference_config import (
+    DEFAULT_YOLO_CHECKPOINT,
+    DEFAULT_YOLO_IMGSZ,
+    PROMPT_BOX_STRATEGIES,
+    Z_PROMPT_MODES,
+    build_postprocess_config,
+    build_yolo_prompt_config,
+    normalize_class_prompt_strategies,
+)
+from inference_io import (
+    build_case_meta,
+    build_combined_label,
+    save_case_meta,
+    save_json,
+    save_mask_outputs,
+)
 from model_factory import load_multitask_model
 from postprocess_3d import postprocess_brats_masks
 from prompt_strategies import (
     CLASS_PROMPT_VARIANTS,
     ET_PROMPT_VARIANTS,
-    PREDICTION_CLASS_ORDER,
     analyze_class_volume_consistency,
     build_class_specific_prompt_info,
     sanitize_prompt_records_for_json,
@@ -27,36 +46,7 @@ from prompt_strategies import (
 )
 
 
-CLASS_NAMES = ("ET", "TC", "WT")
-DEFAULT_YOLO_CHECKPOINT = "workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.pt"
-DEFAULT_YOLO_IMGSZ = 320
-PROMPT_BOX_STRATEGIES = ("top1", "top2_merge")
-Z_PROMPT_MODES = ("none", "smooth", "interpolate")
 LOGGER = logging.getLogger(__name__)
-
-
-def normalize_class_prompt_strategies(
-    prompt_box_strategy,
-    prompt_box_strategy_et=None,
-    prompt_box_strategy_tc=None,
-    prompt_box_strategy_wt=None,
-):
-    class_overrides = {
-        "ET": prompt_box_strategy_et,
-        "TC": prompt_box_strategy_tc,
-        "WT": prompt_box_strategy_wt,
-    }
-    normalized = {}
-    for class_name in CLASS_NAMES:
-        strategy = class_overrides[class_name] or prompt_box_strategy
-        strategy = str(strategy)
-        if strategy not in PROMPT_BOX_STRATEGIES:
-            raise ValueError(
-                f"Unsupported prompt_box_strategy for {class_name}: {strategy}. "
-                f"Expected one of {PROMPT_BOX_STRATEGIES}."
-            )
-        normalized[class_name] = strategy
-    return normalized
 
 
 @dataclass
@@ -826,24 +816,6 @@ PROMPT_PROVIDERS = {
 }
 
 
-def str_to_bool(value):
-    if isinstance(value, bool):
-        return value
-    value = value.lower()
-    if value in {"1", "true", "yes", "y"}:
-        return True
-    if value in {"0", "false", "no", "n"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
-def resolve_torch_device(device):
-    device = str(device)
-    if device.isdigit():
-        return torch.device(f"cuda:{device}")
-    return torch.device(device)
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Whole-case inference for BraTS volumes.")
     parser.add_argument("--case_dir", required=True, help="BraTS case directory with 4 modality NIfTI files.")
@@ -1336,199 +1308,6 @@ def run_volume_inference(
         "raw_consistency": raw_consistency,
     }
     return class_volumes, inference_report
-
-
-def build_combined_label(class_volumes):
-    combined = np.zeros_like(class_volumes["ET"], dtype=np.uint8)
-    combined[class_volumes["WT"] > 0] = 2
-    combined[class_volumes["TC"] > 0] = 1
-    combined[class_volumes["ET"] > 0] = 4
-    return combined
-
-
-def _to_json_compatible(value):
-    if isinstance(value, dict):
-        return {str(key): _to_json_compatible(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_json_compatible(item) for item in value]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
-
-
-def save_json(output_path, payload):
-    output_path = Path(output_path)
-    output_path.write_text(
-        json.dumps(_to_json_compatible(payload), indent=2),
-        encoding="utf-8",
-    )
-
-
-def save_mask_outputs(brats_case, output_dir, class_volumes, combined_label, prefix=""):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    filename_prefix = f"{prefix}_" if prefix else ""
-    brats_case.save_nifti(class_volumes["ET"].astype(np.uint8), output_dir / f"{filename_prefix}ET.nii.gz")
-    brats_case.save_nifti(class_volumes["TC"].astype(np.uint8), output_dir / f"{filename_prefix}TC.nii.gz")
-    brats_case.save_nifti(class_volumes["WT"].astype(np.uint8), output_dir / f"{filename_prefix}WT.nii.gz")
-    brats_case.save_nifti(combined_label.astype(np.uint8), output_dir / f"{filename_prefix}combined_label.nii.gz")
-
-
-def save_case_meta(brats_case, output_dir, meta):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    brats_case.write_case_meta(output_dir, meta)
-
-
-def build_postprocess_config(
-    enabled,
-    closing_radius,
-    opening_radius,
-    wt_keep_largest,
-    keep_topk_tc,
-    keep_topk_et,
-    z_smooth_iterations,
-):
-    return {
-        "enabled": bool(enabled),
-        "closing_radius": int(closing_radius),
-        "opening_radius": int(opening_radius),
-        "wt_keep_largest": bool(wt_keep_largest),
-        "keep_topk_tc": int(keep_topk_tc),
-        "keep_topk_et": int(keep_topk_et),
-        "z_smooth_iterations": int(z_smooth_iterations),
-    }
-
-
-def build_yolo_prompt_config(
-    prompt_mode,
-    yolo_checkpoint,
-    yolo_conf,
-    yolo_iou,
-    yolo_max_det,
-    yolo_topk,
-    prompt_box_strategy,
-    prompt_box_strategy_et,
-    prompt_box_strategy_tc,
-    prompt_box_strategy_wt,
-    top2_score_ratio,
-    top2_area_ratio_min,
-    top2_area_ratio_max,
-    top2_iou_max,
-    z_prompt_mode,
-    z_smooth_window,
-    z_fill_gap_max,
-    z_center_shift_max,
-    z_area_ratio_min,
-    z_area_ratio_max,
-    wt_continuity_enabled,
-    wt_continuity_score_thresh,
-    wt_continuity_center_shift_max,
-    wt_continuity_area_ratio_min,
-    wt_continuity_area_ratio_max,
-    wt_continuity_mask_dilate_iters,
-    wt_continuity_mask_blur_kernel,
-    class_prompt_variant,
-    et_prompt_variant,
-):
-    if prompt_mode != "yolo_box":
-        return None
-    class_strategies = normalize_class_prompt_strategies(
-        prompt_box_strategy=prompt_box_strategy,
-        prompt_box_strategy_et=prompt_box_strategy_et,
-        prompt_box_strategy_tc=prompt_box_strategy_tc,
-        prompt_box_strategy_wt=prompt_box_strategy_wt,
-    )
-    return {
-        "checkpoint": str(Path(yolo_checkpoint).resolve()),
-        "conf": float(yolo_conf),
-        "iou": float(yolo_iou),
-        "imgsz": int(DEFAULT_YOLO_IMGSZ),
-        "max_det": int(yolo_max_det),
-        "topk": int(yolo_topk),
-        "box_strategy": str(prompt_box_strategy),
-        "box_strategy_by_class": class_strategies,
-        "top2_rules": {
-            "score_ratio": float(top2_score_ratio),
-            "area_ratio_min": float(top2_area_ratio_min),
-            "area_ratio_max": float(top2_area_ratio_max),
-            "box_iou_max": float(top2_iou_max),
-        },
-        "z_prompt": {
-            "mode": str(z_prompt_mode),
-            "smooth_window": int(z_smooth_window),
-            "fill_gap_max": int(z_fill_gap_max),
-            "center_shift_max": float(z_center_shift_max),
-            "area_ratio_min": float(z_area_ratio_min),
-            "area_ratio_max": float(z_area_ratio_max),
-        },
-        "wt_continuity": {
-            "enabled": bool(wt_continuity_enabled),
-            "score_thresh": float(wt_continuity_score_thresh),
-            "center_shift_max": float(wt_continuity_center_shift_max),
-            "area_ratio_min": float(wt_continuity_area_ratio_min),
-            "area_ratio_max": float(wt_continuity_area_ratio_max),
-            "mask_dilate_iters": int(wt_continuity_mask_dilate_iters),
-            "mask_blur_kernel": int(wt_continuity_mask_blur_kernel),
-        },
-        "class_prompt_variant": str(class_prompt_variant),
-        "et_prompt_variant": str(et_prompt_variant),
-    }
-
-
-def build_case_meta(
-    brats_case,
-    output_dir,
-    prompt_mode,
-    finetune_method,
-    sam_checkpoint,
-    finetuned_checkpoint,
-    image_size,
-    threshold,
-    postprocess_config,
-    postprocess_report_path=None,
-    prompt_report_path=None,
-    yolo_config=None,
-):
-    return {
-        "case_id": brats_case.case_id,
-        "case_dir": str(brats_case.case_dir.resolve()),
-        "output_dir": str(Path(output_dir).resolve()),
-        "shape": list(brats_case.shape),
-        "affine": brats_case.affine.tolist(),
-        "voxel_spacing": list(brats_case.header.get_zooms()[:3]),
-        "class_order": {str(index): name for index, name in enumerate(CLASS_NAMES)},
-        "combined_label_map": {
-            "1": "NCR/NET (TC minus ET)",
-            "2": "ED (WT minus TC)",
-            "4": "ET",
-        },
-        "prompt_mode": prompt_mode,
-        "finetune_method": finetune_method,
-        "sam_checkpoint": str(Path(sam_checkpoint).resolve()),
-        "finetuned_checkpoint": str(Path(finetuned_checkpoint).resolve()),
-        "image_size": image_size,
-        "threshold": threshold,
-        "normalization": {
-            "mode": "per_volume_minmax_nonzero",
-            "modalities": brats_case.normalization_stats,
-        },
-        "modality_paths": {
-            key: str(path.resolve()) for key, path in brats_case.modality_paths.items()
-        },
-        "segmentation_path": str(brats_case.segmentation_path.resolve()) if brats_case.segmentation_path else None,
-        "postprocess": {
-            **postprocess_config,
-            "report_path": str(postprocess_report_path.resolve()) if postprocess_report_path else None,
-        },
-        "prompt_report_path": str(prompt_report_path.resolve()) if prompt_report_path else None,
-        "yolo": yolo_config,
-    }
 
 
 def main():

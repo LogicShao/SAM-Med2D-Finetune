@@ -5,8 +5,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from brats_constants import PREDICTION_CLASS_ORDER
 
-PREDICTION_CLASS_ORDER = ("WT", "TC", "ET")
 CLASS_PROMPT_VARIANTS = ("baseline", "class_boxes", "class_boxes_points", "class_boxes_points_mask")
 ET_PROMPT_VARIANTS = (
     "default",
