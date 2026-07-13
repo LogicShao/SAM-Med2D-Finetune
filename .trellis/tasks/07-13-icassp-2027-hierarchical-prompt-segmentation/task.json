@@ -1,0 +1,49 @@
+{
+  "id": "icassp-2027-hierarchical-prompt-segmentation",
+  "name": "icassp-2027-hierarchical-prompt-segmentation",
+  "title": "ICASSP 2027: 层级提示鲁棒脑肿瘤分割研究",
+  "description": "将现有工程闭环转化为可投稿的训练方法：建立冻结的 BraTS 病例级评估协议，缩小训练/推理提示域偏移，实现层级一致性训练，并完成强基线、消融与统计检验。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "fuckwin",
+  "assignee": "fuckwin",
+  "createdAt": "2026-07-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-13-diagnose-prompt-and-postprocess-gap",
+    "07-13-freeze-data-protocol-and-evaluator",
+    "07-13-implement-hierarchical-prompt-robust-training",
+    "07-13-run-strong-medical-segmentation-baselines",
+    "07-13-finalize-icassp-statistics-and-paper-assets"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    "train_multitask.py",
+    "multitask_dataset.py",
+    "brats_case.py",
+    "infer_volume.py",
+    "prompt_strategies.py",
+    "postprocess_3d.py",
+    "batch_validate_postprocess.py",
+    "data_brats_raw/split_manifest.json",
+    "report/adapter_verification.md",
+    "report/et_prompt_tuning_report.md"
+  ],
+  "notes": "Task created from the ICASSP readiness audit on 2026-07-13. Existing fixed20 and confirm_large_unseen results remain development evidence only.",
+  "meta": {
+    "conference": "ICASSP 2027",
+    "deadline_window_days": 60,
+    "frozen_split": "data_brats_raw/split_manifest.json",
+    "baseline_checkpoint": "workdir_multi_task/models/finetune_adapter/best_model.pth",
+    "auto_commit": true
+  }
+}
