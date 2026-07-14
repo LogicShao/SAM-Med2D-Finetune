@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from brats_cache import (
+from sam_med2d_finetune.brats.cache import (
     CACHE_IMAGES_DTYPE,
     CACHE_IMAGES_FILENAME,
     CACHE_NORMALIZATION,
@@ -15,9 +15,9 @@ from brats_cache import (
     normalize_nonzero_volume,
     validate_cache_case,
 )
-from brats_case import _normalize_volume
-from multitask_dataset import BraTSDataset
-from training_profiler import parse_cuda_device_index
+from sam_med2d_finetune.brats.case import _normalize_volume
+from sam_med2d_finetune.training.multitask_dataset import BraTSDataset
+from sam_med2d_finetune.training.profiler import parse_cuda_device_index
 
 
 class CachedBraTSDatasetTest(unittest.TestCase):

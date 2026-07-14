@@ -32,7 +32,7 @@
 前置实现缺口：
 
 - `tools/evaluate_yolo_recall.py` 已支持同时扫描 `conf/iou`
-- `infer_volume.py` / `batch_validate_postprocess.py` 目前只暴露 `--yolo_conf`
+- `sam_med2d_finetune.inference.volume` / `sam_med2d_finetune.inference.batch_validate` 目前只暴露 `--yolo_conf`
 - `YoloBoxPromptProvider` 当前将 NMS `iou` 写死为 `0.60`
 - 因此阶段一的第一个交付不是跑实验，而是先补齐端到端链路中的 `--yolo_iou` 透传、记录与落盘
 
@@ -57,7 +57,7 @@
 执行步骤：
 
 1. 补齐参数透传
-   - 为 `infer_volume.py`、`batch_validate_postprocess.py` 增加 `--yolo_iou`
+   - 为 `sam_med2d_finetune.inference.volume`、`sam_med2d_finetune.inference.batch_validate` 增加 `--yolo_iou`
    - 将 `case_meta.json`、`summary_metrics.json`、`summary.md` 记录 `yolo_iou`
    - 保持默认值仍为 `0.60`，确保现有基线可复现
 2. 做 YOLO 层粗筛
@@ -65,7 +65,7 @@
    - 先只看检测层指标，筛出 4 到 6 个候选工作点
    - 淘汰明显漏层严重或背景误报过高的组合，减少后续端到端成本
 3. 做困难病例端到端验证
-   - 对候选工作点运行 `batch_validate_postprocess.py`
+   - 对候选工作点运行 `sam_med2d_finetune.inference.batch_validate`
    - 输出每病例 `case_meta.json`、`preview_3d_compare_all.html`、汇总指标文件
    - 重点比较 `ET/TC/WT Dice`、`Mean Dice`、`post Mean Dice`
 4. 做全量回归确认
@@ -102,7 +102,7 @@
 命令模板：
 
 ```bash
-python tools/evaluate_yolo_recall.py \
+PYTHONPATH=src python -m sam_med2d_finetune.tools.evaluate_yolo_recall \
   --model workdir_yolo/brats_yolo_dev_img320_v8m/weights/best.pt \
   --data datasets/brats_yolo_dev \
   --split val \
@@ -112,7 +112,7 @@ python tools/evaluate_yolo_recall.py \
 ```
 
 ```bash
-python batch_validate_postprocess.py \
+PYTHONPATH=src python -m sam_med2d_finetune.inference.batch_validate \
   --cases_root <cases_root> \
   --case_ids <hard_case_1> <hard_case_2> \
   --output_root outputs/stage1_e2e/conf_0p05_iou_0p60 \

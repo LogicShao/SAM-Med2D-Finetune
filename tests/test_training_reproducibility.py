@@ -8,8 +8,8 @@ from unittest import mock
 import numpy as np
 import torch
 
-from cli_utils import str_to_bool
-from train_multitask import save_epoch_snapshot, seed_everything, seed_worker
+from sam_med2d_finetune.training.train_multitask import save_epoch_snapshot, seed_everything, seed_worker
+from sam_med2d_finetune.utils.cli import str_to_bool
 
 
 class NullLogger:

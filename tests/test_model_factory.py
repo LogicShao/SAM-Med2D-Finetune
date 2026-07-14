@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import torch
 import torch.nn as nn
 
-from model_factory import _unwrap_state_dict, build_multitask_base_model
+from sam_med2d_finetune.models.factory import _unwrap_state_dict, build_multitask_base_model
 
 
 class ModelFactoryTest(unittest.TestCase):
@@ -27,7 +27,7 @@ class ModelFactoryTest(unittest.TestCase):
             )
 
         builder = Mock(return_value=model)
-        with patch("model_factory.sam_model_registry", {"vit_b": builder}):
+        with patch("sam_med2d_finetune.models.factory.sam_model_registry", {"vit_b": builder}):
             result = build_multitask_base_model(
                 model_type="vit_b",
                 image_size=256,

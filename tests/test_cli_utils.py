@@ -1,7 +1,7 @@
 import unittest
 import argparse
 
-from cli_utils import str_to_bool
+from sam_med2d_finetune.utils.cli import str_to_bool
 
 
 class CliUtilsTest(unittest.TestCase):

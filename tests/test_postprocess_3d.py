@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from postprocess_3d import filter_connected_components, postprocess_brats_masks
+from sam_med2d_finetune.inference.postprocess import filter_connected_components, postprocess_brats_masks
 
 
 class Postprocess3DTest(unittest.TestCase):

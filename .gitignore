@@ -5,6 +5,7 @@ __pycache__/
 web_demo/**/__pycache__/
 web_demo/**/*.pyc
 web_demo/static/generated/
+src/sam_med2d_finetune/web_demo/static/generated/
 outputs/web_demo_runs/
 
 # C extensions

@@ -1,6 +1,6 @@
 import unittest
 
-from prompt_strategies import (
+from sam_med2d_finetune.inference.prompts import (
     ET_PROMPT_VARIANTS,
     _resolve_et_prompt_variant,
     build_class_specific_prompt_info,

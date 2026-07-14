@@ -6,22 +6,19 @@
 训练 / 评估 -> 整病例自动分割 -> 3D 后处理 -> 3D 可视化 -> Web 结果查看
 ```
 
-仓库支持两条主要工作流：
+当前活跃工作流已经统一到 `src/` 包布局：
 
-- 单任务路径：先把原始 BraTS `NIfTI` 数据预处理为 `PNG + JSON`，再用 `train_singletask.py` 训练。
-- 多任务路径：直接读取原始 BraTS 病例目录，使用 4 模态输入，预测 `ET / TC / WT`。
+- 多任务训练：`python -m sam_med2d_finetune.training.train_multitask`
+- 整病例推理：`python -m sam_med2d_finetune.inference.volume`
+- 批量验证：`python -m sam_med2d_finetune.inference.batch_validate`
+- 3D 可视化：`python -m sam_med2d_finetune.inference.visualize`
+- Web demo：`python -m sam_med2d_finetune.web_demo.app`
 
-当前实现支持 `Adapter` 和 `LoRA` 两种微调方式，并输出日志、模型、训练曲线与整病例级结果。
+历史单任务 `PNG + JSON` 训练链路、基线评估脚本和根目录 wrapper 已从活跃代码中移除，不再作为当前推荐入口。
 
-除训练与评估外，仓库还包含：
+当前实现支持 `Adapter` 和 `LoRA` 两种多任务微调方式，并输出日志、模型、训练曲线与整病例级结果。
 
-- 整病例自动推理入口 `infer_volume.py`
-- 3D 后处理与结果整理 `postprocess_3d.py`
-- 3D 可视化页面生成 `visualize_case.py`
-- 面向演示与结果查看的 `web_demo/`
-- 面向结项整理的 `report/` 与 `outputs/` 正式汇总结果
-
-如果你只想快速查看现成病例结果，建议直接启动 `web_demo`；如果你要复现实验或替换模型，再使用训练与整病例推理脚本。
+如果你只想快速查看现成病例结果，建议直接启动 `web_demo`；如果你要复现实验或替换模型，再使用 `src/` 下的训练与整病例推理模块。
 
 ## 0. 结项概览
 
@@ -58,30 +55,25 @@
 | 历史大样本确认 | 历史 `LoRA baseline / g4` 在 `confirm_large_unseen` 上的正式确认结果 | [`report/confirm_large_unseen_confirmation.md`](report/confirm_large_unseen_confirmation.md) | [`outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json`](outputs/stage6_large_confirmation/report/confirm_large_unseen_confirmation_summary.json) |
 | 多类别 prompt 正式结果 | `class_boxes_points` 在 `fixed20` 与 `confirm_large_unseen` 上的正式汇总 | 本 README 第 7.3 节 | [`outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/fixed20_adapter_class_boxes_points/summary.md), [`outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md`](outputs/stage8_class_prompt_ablation/confirm_large_unseen_adapter_class_boxes_points/summary.md) |
 | ET 调参结论 | ET-only 小范围调参、冻结默认 ET 配置 | [`report/et_prompt_tuning_report.md`](report/et_prompt_tuning_report.md) | [`outputs/stage9_et_prompt_tuning/et_prompt_tuning.md`](outputs/stage9_et_prompt_tuning/et_prompt_tuning.md), [`outputs/stage9_et_prompt_tuning/recommended_et_variant.md`](outputs/stage9_et_prompt_tuning/recommended_et_variant.md) |
-| Demo 使用说明 | `web_demo` 的结构、启动方式与展示链路 | [`web_demo/README.md`](web_demo/README.md) | `outputs/web_demo_runs/` |
+| Demo 使用说明 | `web_demo` 的结构、启动方式与展示链路 | [`src/sam_med2d_finetune/web_demo/README.md`](src/sam_med2d_finetune/web_demo/README.md) | `outputs/web_demo_runs/` |
 
 ## 1. 仓库结构
 
 ```text
 .
-├── train_singletask.py          # 单任务训练入口
-├── train_multitask.py           # 多任务训练入口
-├── evaluate_baseline.py         # 原始 SAM-Med2D 基线评估
-├── infer_volume.py              # 整病例自动推理入口
-├── postprocess_3d.py            # 3D 后处理与层级约束
-├── visualize_case.py            # 3D HTML 可视化生成
-├── preprocess_brats.py          # BraTS 预处理脚本
-├── create_subset.py             # 抽样小数据集
-├── DataLoader.py                # 单任务数据集与 collate
-├── multitask_dataset.py         # 多任务 BraTS 数据集
-├── metrics.py                   # Dice / IoU 指标
-├── utils.py                     # loss、prompt、box、日志工具
-├── tools/                       # YOLO 数据准备、训练与辅助脚本
-├── web_demo/                    # Web 结果查看与单病例处理入口
-├── segment_anything/            # 本地 SAM-Med2D 实现
+├── src/
+│   ├── sam_med2d_finetune/
+│   │   ├── brats/               # BraTS 病例、cache、指标
+│   │   ├── training/            # 多任务训练入口与数据集
+│   │   ├── inference/           # 整病例推理、后处理、3D 可视化
+│   │   ├── models/              # 模型构建与权重加载
+│   │   ├── tools/               # 数据划分、cache、YOLO 辅助工具
+│   │   ├── utils/               # CLI 与训练通用工具
+│   │   └── web_demo/            # Web 结果查看与单病例处理入口
+│   └── segment_anything/        # 本地 SAM-Med2D 实现
 ├── finetune_scripts/            # 固定实验配置脚本
 ├── pretrain_model/              # 预训练权重
-├── data_demo/                   # 预处理后数据示例
+├── data_demo/                   # 历史示例数据
 └── outputs/                     # 推理、后处理与可视化结果
 ```
 
@@ -112,8 +104,16 @@ pretrain_model/sam-med2d_b.pth
 
 启动方式：
 
+先设置：
+
 ```bash
-python -m web_demo.app
+export PYTHONPATH=src
+```
+
+再启动：
+
+```bash
+python -m sam_med2d_finetune.web_demo.app
 ```
 
 默认访问地址：
@@ -122,7 +122,7 @@ python -m web_demo.app
 http://127.0.0.1:7860
 ```
 
-当前 `web_demo` 默认推理配置见 `web_demo/config.py`，包括：
+当前 `web_demo` 默认推理配置见 `src/sam_med2d_finetune/web_demo/config.py`，包括：
 
 - `finetune_method=adapter`
 - `prompt_mode=yolo_box`
@@ -157,73 +157,42 @@ data_brats_raw/
 └── val/
 ```
 
-`train_multitask.py` 会在训练时构造 4 通道输入，并从 `seg` 生成 `ET / TC / WT` 掩码。
+`sam_med2d_finetune.training.train_multitask` 会在训练时构造 4 通道输入，并从 `seg` 生成 `ET / TC / WT` 掩码。
 
-### 3.2 抽样小数据集
+### 3.2 数据划分与小规模验证
 
-如果你已有完整的 `train/val` 目录，可以先抽样做快速验证：
-
-```bash
-python create_subset.py --source_root data_brats_raw_all --dest_root data_brats_raw --train_num 20 --val_num 4
-```
-
-### 3.3 单任务预处理
-
-`train_singletask.py` 读取的是 `preprocess_brats.py` 生成的 `PNG + JSON` 数据集。
+如果你已有完整病例目录，推荐使用当前 `src` 工具统一生成 `train / val / test` 以及小规模开发子集：
 
 ```bash
-python preprocess_brats.py \
-  --train_data_path data_brats_raw/train \
-  --val_data_path data_brats_raw/val \
-  --processed_data_path data_brats_WT_TC \
-  --labels WT TC
+PYTHONPATH=src python -m sam_med2d_finetune.tools.split_brats_dataset \
+  --source_dir data_brats_raw_all \
+  --out_dir data_brats_raw \
+  --dev_out_dir data_brats_dev \
+  --dev_size 20 \
+  --clean
 ```
 
-生成结构大致如下：
+如果你希望减少训练启动时的 NIfTI 读取成本，可以先构建病例级 cache：
 
-```text
-data_brats_WT_TC/
-├── images/train/*.png
-├── images/val/*.png
-├── labels/train/*.png
-├── labels/val/*.png
-├── image2label_train.json
-└── label2image_val.json
+```bash
+PYTHONPATH=src python -m sam_med2d_finetune.tools.precache_brats_cases \
+  --cases_root data_brats_raw/train \
+  --cache_root temp/brats_cache \
+  --max_cases 4
 ```
 
-可以参考 `data_demo/` 查看格式示例。
+历史单任务 `PNG + JSON` 预处理链路已归档，不再属于当前活跃工作流。
 
 ## 4. 训练
 
 ### 4.1 单任务训练
 
-```bash
-python train_singletask.py \
-  --finetune_method adapter \
-  --data_path data_brats_WT_TC \
-  --work_dir workdir_label_WT
-```
-
-LoRA 版本：
-
-```bash
-python train_singletask.py \
-  --finetune_method lora \
-  --data_path data_brats_WT_TC \
-  --work_dir workdir_label_WT
-```
-
-固定配置脚本：
-
-```bash
-python finetune_scripts/single_task/adapter.py
-python finetune_scripts/single_task/lora.py
-```
+历史单任务训练入口已归档，本仓库当前只维护多任务 `BraTS` 主链路。
 
 ### 4.2 多任务训练
 
 ```bash
-python train_multitask.py \
+PYTHONPATH=src python -m sam_med2d_finetune.training.train_multitask \
   --finetune_method lora \
   --train_data_path data_brats_raw/train \
   --val_data_path data_brats_raw/val \
@@ -233,7 +202,7 @@ python train_multitask.py \
 Adapter 版本：
 
 ```bash
-python train_multitask.py \
+PYTHONPATH=src python -m sam_med2d_finetune.training.train_multitask \
   --finetune_method adapter \
   --train_data_path data_brats_raw/train \
   --val_data_path data_brats_raw/val \
@@ -249,13 +218,16 @@ python finetune_scripts/multi_task/lora.py
 
 ## 5. 基线评估
 
-```bash
-python evaluate_baseline.py \
-  --data_path data_brats_WT_TC \
-  --work_dir workdir_label_WT
-```
+历史单任务基线评估脚本已归档。当前整病例能力的正式评估入口为：
 
-输出会保存到 `baseline_metrics.json` 和日志文件。
+```bash
+PYTHONPATH=src python -m sam_med2d_finetune.inference.batch_validate \
+  --cases_root data_brats_raw/val \
+  --output_root outputs/validation_run \
+  --sam_checkpoint pretrain_model/sam-med2d_b.pth \
+  --finetuned_checkpoint workdir_multi_task/models/finetune_adapter/best_model.pth \
+  --finetune_method adapter
+```
 
 ## 6. 训练输出
 
@@ -386,10 +358,10 @@ Stage 9 只围绕 `ET` 提示做低风险小范围收敛实验，不改 `WT/TC` 
 
 当前仓库已经不再停留在“只会训练”的阶段，而是完成了从原始 BraTS 病例到 3D `NIfTI` 输出、后处理和可视化预览的闭环：
 
-- 已实现整病例推理入口 `infer_volume.py`，可输出 `ET.nii.gz`、`TC.nii.gz`、`WT.nii.gz`、`combined_label.nii.gz`
-- 已实现 `postprocess_3d.py`，支持闭运算、开运算、空洞填充、连通域筛选、Z 轴平滑以及 `ET ⊆ TC ⊆ WT` 层级约束
-- 已实现 `visualize_case.py`，可生成 Raw / Post 对比的 3D HTML 预览
-- 已实现 `web_demo`，可做病例浏览、模式切换、3D 查看与关键切片查看
+- 已实现整病例推理入口 `sam_med2d_finetune.inference.volume`，可输出 `ET.nii.gz`、`TC.nii.gz`、`WT.nii.gz`、`combined_label.nii.gz`
+- 已实现 `sam_med2d_finetune.inference.postprocess`，支持闭运算、开运算、空洞填充、连通域筛选、Z 轴平滑以及 `ET ⊆ TC ⊆ WT` 层级约束
+- 已实现 `sam_med2d_finetune.inference.visualize`，可生成 Raw / Post 对比的 3D HTML 预览
+- 已实现 `sam_med2d_finetune.web_demo`，可做病例浏览、模式切换、3D 查看与关键切片查看
 
 当前 `web_demo` 结果页重点展示：
 
@@ -412,19 +384,19 @@ volume_ml = voxel_count * spacing_x * spacing_y * spacing_z / 1000
 
 ## 9. 注意事项
 
-- `train_singletask.py` 和 `train_multitask.py` 使用的数据格式不同，不能混用。
+- 历史单任务数据管线与当前多任务数据管线格式不同；单任务链路已归档，不要混用旧目录约定。
 - 多任务训练会自动把图像编码器输入层改成 4 通道，以适配 BraTS 四模态输入。
-- `split_raw_data.py` 仍是本地硬编码脚本，不属于当前推荐工作流。
+- 历史 `split_raw_data.py` 已退役；当前推荐使用 `sam_med2d_finetune.tools.split_brats_dataset`。
 - `web_demo` 的基础定量分析依赖现有 mask 与 spacing；若结果目录缺少对应文件，页面会降级显示为“暂不可用”。
 - 如果目标是结项整理，优先引用第 `0.1` 节列出的正式文档，不要直接拼接零散病例目录。
 - 仓库当前没有独立自动化测试目录，改动后建议至少运行：
 
 ```bash
-python -m compileall .
+PYTHONPATH=src python -m compileall src tests finetune_scripts
 ```
 
 再补一次小样本训练或评估命令。
 
 ## 10. 许可证
 
-许可证见根目录 [LICENSE](LICENSE)。`segment_anything/` 相关实现保留原始项目的许可证说明。
+许可证见根目录 [LICENSE](LICENSE)。`src/segment_anything/` 相关实现保留原始项目的许可证说明。

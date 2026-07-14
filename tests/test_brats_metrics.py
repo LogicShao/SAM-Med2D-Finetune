@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from brats_metrics import (
+from sam_med2d_finetune.brats.metrics import (
     compute_binary_metrics,
     compute_hierarchy_violations,
     compute_hd95_mm,

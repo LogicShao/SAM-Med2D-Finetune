@@ -49,7 +49,15 @@ Questions to answer:
 **Command Contract**:
 
 ```powershell
+$env:PYTHONPATH="src"
 conda run -n "sam-med2d-verify" python -B -m unittest discover -s "tests" -v
+```
+
+Source-layout syntax checks should use the same import contract:
+
+```powershell
+$env:PYTHONPATH="src"
+python -B -m compileall "src" "tests" "finetune_scripts"
 ```
 
 **Validation and Error Matrix**:
@@ -57,12 +65,13 @@ conda run -n "sam-med2d-verify" python -B -m unittest discover -s "tests" -v
 | Condition | Required action |
 | --- | --- |
 | `conda run` cannot find `sam-med2d-verify` | Stop and report the missing environment; do not substitute system Python. |
+| `PYTHONPATH=src` is missing and package imports fail | Treat it as a verification setup error and rerun with the source root exported. |
 | Imports for `torch`, `scipy`, or `nibabel` fail | Report the environment as incomplete; do not classify as a source regression. |
 | Unit test fails after imports succeed | Treat it as a code regression and investigate. |
 
 **Cases**:
 
-* Good: `conda run -n "sam-med2d-verify"` executes the relevant test command.
+* Good: `conda run -n "sam-med2d-verify"` executes the relevant test command with `PYTHONPATH=src`.
 * Base: syntax-only checks may use `python -B` when imports are not needed.
 * Bad: running `python -m unittest` from an arbitrary system interpreter.
 
@@ -77,6 +86,7 @@ python -m unittest discover -s "tests"
 #### Correct
 
 ```powershell
+$env:PYTHONPATH="src"
 conda run -n "sam-med2d-verify" python -B -m unittest discover -s "tests" -v
 ```
 
