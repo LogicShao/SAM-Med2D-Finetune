@@ -1,341 +1,236 @@
-# 科技实物结项说明书母版
+﻿# 科技实物结项说明书（阶段同步版）
 
-## 项目概述
+> 同步时间：2026-03-23
+> 本文档用于同步仓库当前最新实验进展、默认展示口径与结项材料状态。
 
-本项目围绕 BraTS 脑肿瘤数据，基于 `SAM-Med2D`、`YOLO` 与三维后处理链路，完成了从“模型训练验证”向“整病例自动分割与三维展示原型”推进。当前成果已经不再停留在单纯训练模型，而是形成了可重复运行的自动推理闭环，并积累了固定病例集的正式回归结果，可作为科技实物结项说明书的母版。
+## 1. 项目概述
 
-从仓库当前结果看，项目的核心价值主要体现在两点：
+本项目面向 BraTS 脑肿瘤分割任务，基于 `YOLO + SAM-Med2D + 3D 后处理` 构建了从训练、自动提示、整病例推理到三维展示的完整闭环。到当前阶段，项目已经不再停留在单纯的训练曲线比较，而是形成了可重复运行、可批量验证、可用于结项展示的整病例自动分割原型。
 
-1. 已完成 `YOLO 检测框 -> SAM-Med2D 分割 -> 3D 后处理 -> 3D 可视化` 的整病例闭环。
-2. 已在固定 `hard8` 与 `fixed20` 病例集上完成 prompt 策略、`z` 轴连续性策略与 `WT-only continuity` 的正式回归，形成了明确的默认配置建议。
+当前可以明确冻结的项目状态如下：
 
-## 与申报书/中期报告衔接
+- 训练阶段已经完成单任务与多任务微调对比，默认主模型应切换为多任务 `Adapter`。
+- 正式回归链路已经覆盖 `fixed20`、`confirm_large_unseen` 等数据集，能够稳定输出 `ET / TC / WT` 三类结果与病例级汇总指标。
+- `WT-only continuity` 的机制验证已经补齐到 `Adapter` 口径，但当前仍应保留 `baseline` 作为默认标准入口，`g4` 作为机制增强对照组。
+- 多类别 Prompt 改造已经完成从“统一 YOLO 框”到“类间差异化 Prompt” 的切换，类间塌缩问题已经解决。
+- ET Prompt 专项调优已经完成一轮系统性收敛实验，当前没有发现优于 `default` 的 ET-only 新变体。
+- 结项图表、定性示意图与差异化 Prompt 流程图已经整理完成，可直接用于报告或答辩展示。
 
-原目标为建设一个面向脑肿瘤三维可视化与辅助分析的 Web 系统，包含后端服务、数据库管理以及前端三维展示能力，最终形态强调“可视化展示 + 自动处理 + 交互查看”。
+## 2. 当前系统闭环
 
-中期阶段已完成的内容主要包括：
+仓库当前已经具备如下能力：
 
-- BraTS 原始数据处理与切片级数据准备；
-- 基于 `YOLO + SAM-Med2D` 的自动分割主线打通；
-- 初步三维重建与结果预览能力；
-- 单任务与多任务微调训练流程跑通，并形成初步指标对比。
+1. 数据层：支持 BraTS 原始 `NIfTI` 病例读取、四模态组织与切片级训练/推理数据准备。
+2. 模型层：支持 `SAM-Med2D` 的单任务与多任务微调，当前正式默认模型为多任务 `Adapter` 检查点。
+3. 自动提示层：通过 `YOLO` 检测器为 `SAM-Med2D` 自动生成初始框提示，并进一步支持类间差异化 Prompt。
+4. 整病例推理层：支持对单个 BraTS 病例输出 `ET / TC / WT` 掩码、融合标签与病例级评估结果。
+5. 3D 后处理层：支持闭运算、开运算、连通域筛选、`ET ⊆ TC ⊆ WT` 约束与 `z` 向平滑。
+6. 结果展示层：支持病例级 3D HTML 预览、总结指标、提示统计与可复用的结项图表。
+7. 批量验证层：支持固定病例集的正式回归，自动生成 `summary.md`、`summary_metrics.json`、`prompt_stats.json` 等文件。
 
-当前阶段相对中期新增并冻结的内容主要包括：
+## 3. 训练阶段结论
 
-- 已将系统推进为整病例自动分割闭环，而非仅切片级实验；
-- 已建立固定病例集的正式回归流程，能够对不同 prompt 策略进行可重复对比；
-- 已完成 `WT-only continuity` PoC 以及 `WT gate` 收敛实验，形成“Adapter baseline 默认主配置 + g4 机制验证对照”的冻结建议。
-
-因此，项目当前状态与申报目标的衔接关系可以概括为：算法主线和展示主线已经具备原型基础，结项阶段更适合以“展示优先、复用现有结果、适度保留在线推理”为策略，完成科技实物形式的整合与说明。
-
-## 当前系统闭环
-
-当前仓库已经具备如下闭环能力：
-
-1. 数据层  
-支持 BraTS 原始 `NIfTI` 病例读取、四模态输入组织、训练与推理所需的切片级数据准备。
-
-2. 模型层  
-支持 `SAM-Med2D` 的单任务与多任务微调；当前整病例自动推理的默认主模型已完成 `Adapter` 口径补证，应切换并冻结为多任务 `Adapter` 检查点；既有 `fixed20`、`hard8`、`confirm_large_unseen` 正式回归结果则来自此前固定的多任务 `LoRA` 主模型，补充结果详见 `adapter_verification.md`。
-
-3. 自动提示层  
-通过 `YOLO` 检测器为 `SAM-Med2D` 提供自动 bbox prompt，当前正式基线工作点已固定为 `conf=0.05, iou=0.60`。
-
-4. 整病例推理层  
-已实现整病例推理入口，可对单个 BraTS 病例输出 `ET / TC / WT` 掩码及合并标签结果。
-
-5. 三维后处理层  
-已实现 3D 后处理，包含闭运算、开运算、连通域筛选、`ET ⊆ TC ⊆ WT` 约束以及 `z` 轴平滑。
-
-6. 结果展示层  
-已支持 3D HTML 预览与病例级结果回放，可直接复用现有 `outputs` 目录中的预览与汇总文件进行展示。
-
-7. 批量验证层  
-已支持对固定病例集批量生成 `summary.md`、`summary_metrics.json`、`prompt_stats.json` 等结果文件，形成正式回归链路。
-
-综上，当前系统已经具备“样例病例自动处理 + 三维结果展示 + 结果汇总说明”的科技实物原型基础。
-
-## 主要实验结论
-
-### 1. 训练阶段结论
-
-根据仓库 `README` 中已记录的训练日志，当前可确认的训练阶段结果如下：
+根据当前仓库已冻结的训练日志，训练阶段可以保留如下结论：
 
 | 配置 | 最佳验证 Dice | 最佳验证 IoU | 结论 |
 | --- | ---: | ---: | --- |
-| 单任务 WT Adapter | 0.8335 | 0.7402 | 对应 `workdir_label_WT`，即仅对 `WT` 做二值分割，当前单任务日志中表现最好 |
-| 单任务 WT LoRA | 0.8113 | 0.6966 | 对应 `workdir_label_WT`，即仅对 `WT` 做二值分割，明显优于原始基线 |
-| 多任务 Adapter | 0.7560 | 0.6619 | 当前多任务训练日志中表现最好，应作为默认 pipeline 主模型 |
-| 多任务 LoRA | 0.7265 | 0.6215 | 低于单任务，但符合多类别任务更复杂的预期 |
-| 原始基线 | 0.5303 | 0.3882 | 作为对照参考 |
+| 单任务 WT Adapter | 0.8335 | 0.7402 | 单任务 `WT` 二值分割的最佳历史结果 |
+| 单任务 WT LoRA | 0.8113 | 0.6966 | 明显优于原始基线 |
+| 多任务 Adapter | 0.7560 | 0.6619 | 当前多任务训练口径下的最佳主模型 |
+| 多任务 LoRA | 0.7265 | 0.6215 | 低于多任务 Adapter |
+| 原始基线 | 0.5303 | 0.3882 | 对照项 |
 
-这里的“单任务”容易产生歧义，需要额外说明：单任务路径不是同时输出 `WT / TC / ET` 的多类任务，而是“每次只学习一个二值 mask”的训练范式。仓库当前确实存在 `WT`、`WT_TC`、`WT_TC_ET` 三套单任务数据与工作目录，但本表中的两项单任务结果具体对应 `WT` only，即 `workdir_label_WT` 这一组历史日志；`WT_TC` 与 `WT_TC_ET` 没有纳入当前结项表格。
+训练阶段的核心结论没有变化：模型本身已经学到有效分割能力，当前系统瓶颈主要不在“模型能否学到”，而在“自动 Prompt 质量、整病例推理与后处理链路是否足够稳定”。
 
-训练阶段结论可以冻结为：微调本身是有效的，模型能力上限已被验证；当前系统瓶颈已经从“模型是否能学到”转移到“自动 prompt 质量与整病例推理策略是否稳定”。需要补充说明的是，当前训练日志显示多任务 `Adapter` 明显优于多任务 `LoRA`，因此此前把多任务 `LoRA` 继续作为整病例 pipeline 默认主模型，应视为口径上的历史失误。
+## 4. 最新实验进展
 
-下面 `fixed20`、`hard8`、`confirm_large_unseen` 等策略回归数据，仍然保留为“固定多任务 `LoRA` 主模型下的历史对比证据”。这些结果可以支持 prompt / continuity 机制分析，但不应再直接表述为当前多任务 `Adapter` pipeline 的正式默认配置。
+### 4.1 Stage7：Adapter 正式补齐验证
 
-### 2. 系统阶段结论
+本轮最重要的同步点，是正式补齐了 `Adapter` 在 `fixed20` 与 `confirm_large_unseen` 上的 baseline / g4 证据链。历史 LoRA 结果现在只保留为对照，不再作为默认模型依据。
 
-当前系统已从单纯训练模型推进到 `YOLO 检测框 -> SAM-Med2D 分割 -> 3D 后处理 -> 3D 可视化` 的整病例闭环。这一结论已经由仓库现有整病例推理、后处理、HTML 预览与批量回归结果共同支撑。
+| 数据集 | 模型 | 组别 | post Mean Dice | ET | TC | WT |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `fixed20` | Adapter | baseline | 0.528955 | 0.374207 | 0.512041 | 0.700616 |
+| `fixed20` | Adapter | g4 | 0.536124 | 0.374207 | 0.512041 | 0.722123 |
+| `fixed20` | LoRA | baseline | 0.524049 | 0.372901 | 0.515366 | 0.683878 |
+| `fixed20` | LoRA | g4 | 0.528580 | 0.372901 | 0.515366 | 0.697473 |
+| `confirm_large_unseen` | Adapter | baseline | 0.546043 | 0.434018 | 0.556753 | 0.647360 |
+| `confirm_large_unseen` | Adapter | g4 | 0.547477 | 0.434018 | 0.556753 | 0.651660 |
+| `confirm_large_unseen` | LoRA | baseline | 0.536181 | 0.432519 | 0.555623 | 0.620401 |
+| `confirm_large_unseen` | LoRA | g4 | 0.535515 | 0.432519 | 0.555623 | 0.618403 |
 
-### 3. 历史正式 baseline 结论（多任务 LoRA 主模型）
+Adapter 口径下可以冻结的结论如下：
 
-在既有多任务 `LoRA` 主模型回归中，正式 baseline 固定为：
+- `Adapter baseline` 在 `fixed20` 与 `confirm_large_unseen` 上均优于历史 `LoRA baseline`。
+- `Adapter g4` 在两个数据集上也都取得正增益，其中 `fixed20` 的 `WT` 增益更明显。
+- 但从角色定位上，`baseline` 仍应保留为默认标准入口，`g4` 更适合作为 `WT-only continuity` 的机制展示组，而不是唯一默认方案。
+- `confirm_large_unseen` 上 `Adapter g4` 相对 `Adapter baseline` 的 case-level 统计为 `86 / 7 / 74 (win / tie / loss)`，mean delta 为 `+0.001433`，说明其增益真实存在，但幅度较小，更适合在报告中解释为“可解释的小幅增强”，而非“完全替代 baseline 的新默认方案”。
 
-- detector: `conf=0.05, iou=0.60`
-- prompt policy: `top1`
+详细补充证据见 [adapter_verification.md](./adapter_verification.md)。
+
+### 4.2 Stage8：多类别 Prompt 消融结论
+
+类间差异化 Prompt 的主要任务，不是简单追求某一类指标上升，而是先解决三类输出塌缩问题，并在此基础上尽量提升整体指标。`fixed20` 上的正式对比如下：
+
+| 方案 | fixed20 post Mean Dice | ET | TC | WT | raw all_equal_ratio | post all_equal_ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `Adapter baseline` | 0.528955 | 0.374207 | 0.512041 | 0.700616 | 1.0 | 1.0 |
+| `class_boxes` | 0.492784 | 0.248299 | 0.528754 | 0.701298 | 0.0 | 0.0 |
+| `class_boxes_points` | 0.547851 | 0.404318 | 0.537971 | 0.701264 | 0.0 | 0.0 |
+| `class_boxes_points_mask` | 0.526766 | 0.349253 | 0.530001 | 0.701045 | 0.0 | 0.0 |
+
+对 `fixed20` 而言，当前最优结论很明确：
+
+- `baseline` 虽然整体还能工作，但 `WT = TC = ET` 的类间塌缩在 raw/post 两个阶段都达到 `100%`，不适合作为“多类别分析模式”。
+- `class_boxes` 解决了塌缩，但 ET 退化明显，单独使用不划算。
+- `class_boxes_points` 是当前最佳平衡点，相对 `Adapter baseline` 的增益为：`Mean Dice +0.018896`、`ET +0.030110`、`TC +0.025930`、`WT +0.000649`。
+- `class_boxes_points_mask` 没有进一步带来稳定收益，说明在当前阶段继续堆叠 mask prompt 的收益有限。
+
+在 `confirm_large_unseen` 上，当前正式跑通的是 `Adapter + class_boxes_points`，结果为：
+
+- `post Mean Dice = 0.552610`
+- `ET = 0.420123`
+- `TC = 0.587752`
+- `WT = 0.649955`
+
+相对 `Adapter baseline` 的变化为：
+
+- `Mean Dice +0.006567`
+- `ET -0.013895`
+- `TC +0.030999`
+- `WT +0.002595`
+
+因此可以冻结的结论是：
+
+- 多类别差异化 Prompt 路线已经成立，三类塌缩问题已经解决。
+- 当前 `WT` 与 `TC` 的类间 Prompt 设计是有效的，且在更大未见样本上仍有正增益。
+- 剩余主要问题已经收敛到 `ET`，后续优化应聚焦 ET，而不是重新推翻整条多类别 Prompt 路线。
+
+### 4.3 Stage9：ET Prompt 收敛实验结论
+
+在 Stage8 之后，本轮只对 ET Prompt 做小范围、低风险、可解释的收敛实验，目标是在不动 WT/TC 逻辑的前提下，寻找优于当前 `default` 的 ET-only 版本。
+
+`fixed20` 上的正式结果如下：
+
+| ET 变体 | post Mean Dice | ET | TC | WT |
+| --- | ---: | ---: | ---: | ---: |
+| `default` | 0.547851 | 0.404318 | 0.537971 | 0.701264 |
+| `q92_pad4_p1_n2` | 0.546798 | 0.399499 | 0.539554 | 0.701342 |
+| `q95_pad4_p1_n2` | 0.532104 | 0.347318 | 0.543296 | 0.705699 |
+| `q95_pad8_p1_n2_widefb` | 0.545067 | 0.402407 | 0.520542 | 0.712253 |
+| `q92_pad4_p2_n2` | 0.547799 | 0.401877 | 0.540138 | 0.701381 |
+| `q90_pad2_p1_n0` | 0.527140 | 0.341197 | 0.538925 | 0.701299 |
+
+本轮 ET 收敛实验的核心结论是：
+
+- 当前没有任何一个 ET-only 变体同时优于 `default` 的 `Mean Dice` 和 `ET Dice`。
+- `default` 仍是当前最稳妥的 ET 默认配置。
+- `q95` 系列会显著拉高 fallback 频率，其中 `q95_pad4_p1_n2` 的 ET fallback 次数达到 `680`，`q95_pad8_p1_n2_widefb` 更达到 `1312`，说明阈值过高会把问题推向“小候选 + 高频 fallback”。
+- `q90_pad2_p1_n0` 去掉负点后 ET 明显退化，说明当前 ET 分支仍需要负点约束。
+
+因此可以冻结的结论是：
+
+- `ET default` 保持不变。
+- 当前不建议把新的 ET-only 变体推进到 `confirm_large_unseen`。
+- 后续如果继续优化，应优先改 ET 候选区域生成与 fallback 机制，而不是继续做大范围阈值/点数网格搜索。
+
+详细说明见 [et_prompt_tuning_report.md](./et_prompt_tuning_report.md)。
+
+## 5. 当前默认方案与展示口径
+
+结合 Stage7、Stage8、Stage9 的最新证据，当前建议冻结如下展示口径：
+
+### 5.1 标准模式默认方案
+
+- 模型：多任务 `Adapter baseline`
+- Prompt：`yolo_box + top1`
+- `z_prompt_mode = none`
+- `WT continuity = disabled`
 - 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
 
-在固定 20 例正式回归上，baseline 结果为：
+这个方案用于：
 
-- `post Mean Dice = 0.524049`
-- `ET post Dice = 0.372901`
-- `TC post Dice = 0.515366`
-- `WT post Dice = 0.683878`
+- 正式默认回归口径
+- web demo 默认入口
+- 结项说明中的“标准模式”
 
-这组配置应视为既有多任务 `LoRA` 主模型回归口径下的正式对照基线。
+### 5.2 多类别分析模式
 
-### 4. 全类 smooth / interpolate 结论
+- 模型：多任务 `Adapter`
+- Prompt 变体：`class_boxes_points`
+- ET 变体：`default`
 
-围绕全类别 `z` 轴连续性 prompt 所做的 `smooth` 与 `interpolate` 实验，已经可以冻结为“无稳定收益”。
+这个方案用于：
 
-固定 20 例结果如下：
+- 展示差异化 Prompt 策略的有效性
+- 演示 `WT / TC / ET` 三类在定性图中的层级分布
+- 支撑 Prompt 机制相关的图表与说明
 
-| 配置 | Post Mean Dice | ET | TC | WT | 结论 |
-| --- | ---: | ---: | ---: | ---: | --- |
-| baseline top1 | 0.524049 | 0.372901 | 0.515366 | 0.683878 | 正式基线 |
-| `top1 + smooth` | 0.5233 | 0.3794 | 0.5206 | 0.6700 | 整体略降，WT 回退 |
-| `top1 + interpolate` | 0.5241 | 0.3725 | 0.5150 | 0.6849 | 基本持平，收益极弱 |
+### 5.3 机制验证对照组
 
-结合 `hard8` 与 `fixed20` 的正式回归，结论为：
+- 方案：`Adapter g4`
+- 定位：`WT-only continuity` 的机制增强组
+- 用途：展示 `WT missing_box` 补救思路与小幅稳定增益
 
-- 全类 `smooth` 不适合作为默认策略；
-- 全类 `interpolate` 虽较安全，但没有形成足够明确的整体收益；
-- 不建议再回到“全类 continuity”方向继续大规模扫参。
+需要强调的是：
 
-### 5. Prompt policy 结论
+- `LoRA baseline / g4` 现在只保留为历史对照，不再作为当前默认模型依据。
+- `Adapter baseline` 是正式默认标准。
+- `Adapter g4` 是机制展示组，不应在文档中表述成“唯一最优默认方案”。
 
-在 `top1`、`top2_merge`、`ET/TC=top1, WT=top2_merge` 等 prompt 策略对比后，当前结论仍然保持不变：默认 prompt policy 应保持 `top1`。已有结果显示，`top2_merge` 或混合策略在困难病例上可能出现局部增益，但在固定 20 例正式回归中不能稳定泛化，因此不适合作为默认方案。
+## 6. 结项图表与展示素材状态
 
-### 6. WT-only continuity 结论
+当前已经完成并落盘的结项图表如下：
 
-在保持 `ET/TC` 完全不变、仅对 `WT` 启用 continuity 的前提下，`WT-only continuity` 已经验证成立。
+- [图1：主路线与结果总览](../fig/png/figure1_main_model_route.png)
+- [图2：多类别 Prompt 修复对比](../fig/png/figure2_multiclass_prompt_repair.png)
+- [图3：分类别增量对比](../fig/png/figure3_classwise_delta.png)
+- [图4：ET Prompt 调优结果](../fig/png/figure4_et_prompt_tuning.png)
+- [图5：Adapter 与 LoRA 训练对比](../fig/png/figure5_training_adapter_vs_lora.png)
+- [图6：YOLO 指标摘要](../fig/png/figure6_yolo_summary.png)
+- [图7：YOLO 提示框 + SAM 三类预测定性示意](../fig/png/figure7_yolo_sam_qualitative_demo.png)
+- [图8：差异化 Prompt 策略流程图](../fig/png/figure8_prompt_strategy_flow.png)
 
-冻结结果如下：
+对应的 SVG 版本也已整理至 `fig/svg/` 目录，可直接用于论文、答辩或高分辨率排版。
 
-- `hard8`：baseline `0.365315 -> g0 0.380571`
-- `hard8 WT`：`0.636206 -> 0.681975`
-- `fixed20`：baseline `0.524049 -> g0 0.530754`
-- `fixed20 WT`：`0.683878 -> 0.703994`
+## 7. Web demo 同步状态
 
-对应解释为：
+当前结项展示更适合采用“展示优先、复用现有结果、默认口径前置”的策略，而不是在结项阶段继续扩展新的在线推理能力。当前建议如下：
 
-- `ET/TC` 保持 baseline 行为不变；
-- 整体收益主要来自 `WT`；
-- 该收益不是由 box smooth 带来，而是由 `WT missing_box` 场景下的补救机制带来。
+- web demo 默认模型切换到 `Adapter baseline`。
+- 标准入口绑定“标准模式”，多类别分析作为辅助入口保留。
+- g4 作为可选对照入口存在，但不应覆盖 baseline 的默认地位。
+- 页面展示优先复用现有 `outputs/` 结果、3D HTML 预览与图表素材，保证稳定性与可讲解性。
 
-因此，`WT-only continuity` 是当前项目在 prompt 机制层面最明确成立的新增结果。
+## 8. 当前不足与下一步建议
 
-### 7. WT gate 收敛结论
+当前仍然存在的主要问题如下：
 
-在 `WT-only continuity` 的基础上，进一步做了 `WT gate` 参数收敛，目标是降低误触发与 `harm`，同时保持 overall 与 WT 的正收益。
+1. `WT-only continuity` 仍存在 case-level `harm`，虽然在 Adapter 口径下整体可保留，但还不适合直接升级为唯一默认方案。
+2. 多类别 Prompt 路线已经成立，但 ET 仍是主要瓶颈，特别是候选区域生成与 fallback 触发逻辑。
+3. 当前最值得继续投入的方向，不是重新回到全类别 continuity 或大规模扫参，而是集中分析：
+   - `WT missing_box` 造成的误触发病例；
+   - ET 候选区域质量；
+   - ET fallback 的触发条件与 fallback box 生成方式。
 
-现有结果中，`g4` 更适合作为 `WT-only continuity` 的机制验证对照配置：
+因此，下一步建议冻结为：
 
-- `fixed20 post Mean Dice = 0.528580`，较 baseline `+0.004531`
-- `fixed20 WT post Dice = 0.697473`，较 baseline `+0.013594`
+- 默认展示与正式报告全部切换到 `Adapter` 口径。
+- 以 `Adapter baseline` 作为主对照，以 `Adapter g4` 作为机制增强对照。
+- 多类别 Prompt 维持 `class_boxes_points + ET default`。
+- 若仍有少量实验空间，优先分析 ET fallback 与 WT missing_box，而不是继续扩展新的大规模参数网格。
 
-与高收益参考组 `g0` 相比，`g4` 的优势不在于绝对数值更高，而在于误触发显著减少，整体更稳：
+## 9. 关键文件索引
 
-- `trigger_total: 1314 -> 1098`
-- `harm: 733 -> 671`
-- `low_score: 385 -> 176`
-- `center_jump: 133 -> 72`
-- `area_jump: 205 -> 138`
+- 总报告：[report.md](./report.md)
+- Adapter 补充验证：[adapter_verification.md](./adapter_verification.md)
+- ET Prompt 收敛报告：[et_prompt_tuning_report.md](./et_prompt_tuning_report.md)
+- confirm_large_unseen 历史确认报告：[confirm_large_unseen_confirmation.md](./confirm_large_unseen_confirmation.md)
+- Adapter 对比汇总 JSON：`outputs/stage7_adapter_verification/summary/adapter_comparison.json`
+- ET Prompt 汇总 JSON：`outputs/stage9_et_prompt_tuning/et_prompt_tuning.json`
 
-同时，`missing_box` 主收益仍被保留：
+## 10. 阶段结论
 
-- `missing_box: 827 -> 811`
+截至当前仓库状态，可以给出一条清晰、统一的结项结论：
 
-因此，当前可以冻结的机制结论是：
-
-1. 主要收益来自 `WT missing_box` 补救；
-2. 应优先收紧 `low_score / center_jump / area_jump` 误触发；
-3. 不建议再回到 `ET/TC continuity` 或大规模全局扫参。
-4. `g4` 可以保留为展示机制的对照配置，但不能取代 baseline 成为结项默认主配置。
-
-### 8. confirm_large_unseen 大样本确认结论
-
-在固定 20 例之外，项目又补做了 `confirm_large_unseen` 大样本确认实验。该集合包含 167 例病例，来源于当前验证集全部 187 例中排除 `fixed20` 与 `hard8` 后得到的更大未参与调参样本。
-
-本轮只比较 baseline 与 `g4`，不再调参、不改模型、不改代码逻辑。这里固定的模型底座仍是当时的多任务 `LoRA` 主模型。结果如下：
-
-- baseline：`post Mean Dice = 0.536181`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.620401`
-- `g4`：`post Mean Dice = 0.535515`，`ET = 0.432519`，`TC = 0.555623`，`WT = 0.618403`
-- 相对 baseline，`g4` 的 overall 变化为 `-0.000666`，`WT` 变化为 `-0.001998`
-- case-level 统计为 `win / tie / loss = 86 / 13 / 68`
-- mean delta 为 `-0.000666`，bootstrap 95% CI 为 `[-0.005824, 0.004504]`
-
-这一结果说明：`g4` 在 fixed20 上的收益结论并没有在更大未见样本上稳定复现。虽然 `ET/TC` 仍保持不退化，但 `WT` 与 overall 均出现轻微回退，因此当前不能再将 `g4` 表述为“更大样本默认最优配置”。
-
-需要补充的是，上述结论仅对应历史多任务 `LoRA` 主模型；补充完成的 `Adapter` 验证显示，`Adapter g4` 在同一 `confirm_large_unseen` 集合上恢复为 `+0.001433` overall、`+0.004300` WT 的小幅正增益，但这仍不足以改写 baseline 作为默认入口的角色，详见 `adapter_verification.md`。
-
-结合 fixed20 与 `confirm_large_unseen` 两轮证据，可以冻结的判断是：
-
-1. `WT-only continuity` 作为机制方向是成立的；
-2. `g4` 可作为 `WT missing_box` 补救机制的展示配置；
-3. 若以更大未参与调参样本作为结项主证据，baseline 仍是更稳妥的默认主对照。
-
-## 历史推荐配置（基于多任务 LoRA 主模型，仅作历史机制对照）
-
-结合 fixed20 与 `confirm_large_unseen` 的现有结果，在既有多任务 `LoRA` 主模型口径下，更适合冻结三套角色清晰的配置：baseline 作为正式主对照与稳妥默认，`g4` 作为 `WT-only continuity` 展示参考组，`g0` 作为高收益研究参考组。
-
-但需要明确：由于当前 pipeline 默认主模型应切换为多任务 `Adapter`，下述三套配置只能作为旧 `LoRA` 主模型下的历史冻结口径与策略参考，不能直接等同于当前 `Adapter` pipeline 的正式默认；关于已补齐的多任务 `Adapter` baseline / g4 对照结果，详见 `adapter_verification.md`。
-
-### 1. 正式主对照与稳妥默认配置
-
-- detector: `conf=0.05, iou=0.60`
-- prompt policy: `top1`
-- `z_prompt_mode: none`
-- `WT continuity: disabled`
-- 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
-
-这套配置对应既有多任务 `LoRA` 主模型下的正式 baseline。原因很明确：在更大未参与调参样本 `confirm_large_unseen` 上，baseline 的 overall 与 WT 均优于 `g4`，因此在旧口径下更适合作为主对照与稳妥默认；当前正式默认则应以 `adapter_verification.md` 中已补齐的 `Adapter baseline` 为准。
-
-### 2. WT-only continuity 展示参考配置
-
-- detector: `conf=0.05, iou=0.60`
-- prompt policy: `top1`
-- `z_prompt_mode: none`
-- `WT continuity: enabled`
-- `WT gate score_thresh = 0.08`
-- `WT gate center_shift_max = 72`
-- `WT gate area_ratio_min = 0.33`
-- `WT gate area_ratio_max = 3.0`
-- `WT gate mask_dilate_iters = 1`
-- `WT gate mask_blur_kernel = 3`
-- 后处理：`closing_radius=2, opening_radius=1, wt_keep_largest=true, keep_topk_tc=1, keep_topk_et=1, z_smooth_iterations=3`
-
-这套配置对应 `g4`。它在 fixed20 上表现为更稳健的 `WT gate` 收敛组，适合用于展示 `WT-only continuity` 机制本身；但在 `confirm_large_unseen` 上未能继续优于 baseline，因此在旧口径下更适合作为“机制展示参考组”，而不是唯一默认配置。
-
-### 3. 高收益参考组
-
-保留 `g0` 作为高收益参考组：
-
-- `WT gate score_thresh = 0.15`
-- `WT gate center_shift_max = 48`
-- `WT gate area_ratio_min = 0.5`
-- `WT gate area_ratio_max = 2.0`
-- `WT gate mask_dilate_iters = 1`
-- `WT gate mask_blur_kernel = 3`
-
-`g0` 的 fixed20 结果更高，为：
-
-- `post Mean Dice = 0.530754`
-- `WT post Dice = 0.703994`
-
-但其误触发与 `harm` 明显更多，因此更适合作为研究参考组，而不是默认展示组。
-
-## 结项展示版 Web demo 技术路线
-
-结项展示版 Web demo 建议采用“展示优先、只读复用现有结果、默认口径前置”的策略，不在结项阶段重写算法主线，也不再扩展新实验。
-
-### 1. 技术栈选择
-
-当前展示层已收敛为 `FastAPI + Jinja2 + 原生 JS` 的轻量组合：
-
-- `FastAPI` 负责结果文件索引、静态 HTML 预览文件挂载和统一启动入口；
-- `Jinja2` 负责页面模板渲染，原生 JS 负责最小交互与任务轮询；
-- 页面只读复用已有 `outputs`，不增加数据库、登录、任务队列等重组件。
-
-### 2. 数据复用原则
-
-展示版 Web demo 应尽量复用仓库现有产物，不重写算法主线：
-
-- 直接读取 `summary.md`、`summary_metrics.json`、`prompt_stats.json`；
-- 直接嵌入现有 `preview_3d_compare_all.html`；
-- 直接读取病例目录中的 `case_meta.json` 与 `post_combined_label.nii.gz`；
-- 2D 切片图仅作为展示层生成，不改变任何预测结果文件。
-
-### 3. 页面组织
-
-页面至少包含以下三部分：
-
-1. 首页  
-展示项目简介、技术路线、当前冻结结论，并明确写出：`Adapter baseline` 是默认主配置，g4 只是机制验证对照组；同时提供“标准模式”和“多类别分析模式”两个入口，其中标准模式为默认入口。
-
-2. 病例选择页  
-支持选择 `fixed20`、`hard8`、`confirm_large_unseen` 中的样例病例，并给出典型病例分组说明。
-
-3. 结果展示页  
-展示病例基本信息、模式信息、2D 切片叠加图、3D HTML 预览、体积信息以及关键结论文案；标准模式以整体病灶范围为主，多类别分析模式用于辅助观察 WT / TC / ET 区域分布。
-
-### 4. 展示口径约束
-
-结项展示阶段必须内置以下口径：
-
-- `Adapter baseline` 作为默认展示配置；
-- Web demo 默认入口为“标准模式”，绑定 `Adapter baseline`；
-- “多类别分析模式”绑定 `Adapter + class_boxes_points + default ET`，用于辅助观察不同肿瘤区域分布，但不替代标准模式；
-- g4 用于展示 `WT missing_box` 补救机制与 fixed20 上的正信号；
-- `Adapter g4` 在 `confirm_large_unseen` 上虽保持小幅正增益，但不应表述为唯一默认配置；
-- 典型病例应覆盖 baseline 稳定样例、fixed20 上的 WT-only 正信号样例，以及 g4 触发收益与触发伤害并存的说明样例。
-
-### 5. 在线推理定位
-
-在线推理不应作为本轮结项 demo 的主线能力。原因是：
-
-- 现有项目价值已经足以通过固定样例与正式回归结果展示；
-- 在线推理会额外引入 GPU 环境、文件上传、耗时反馈和容错问题；
-- 结项阶段更应优先保证展示稳定性、可截图性和可讲解性。
-
-## 当前不足与下一步
-
-当前项目的主要不足有以下几点：
-
-1. Web 端完整产品形态尚未最终封装  
-原目标中的后端、数据库、前端三维展示虽已有清晰路径，但当前仓库中更成熟的是算法闭环和离线结果展示，而不是完整在线系统。
-
-2. WT continuity 仍存在误触发  
-虽然 `g4` 已较 `g0` 明显收敛，但 `harm` 仍然存在，说明 `missing_box` 补救虽有效，但长段传播和边界条件仍需进一步控制。
-
-3. 机制收益集中在 WT  
-当前实验表明，`ET/TC` continuity 不适合继续推进，收益主要集中在 `WT`。这意味着项目现阶段的算法优化空间更偏向细化 `WT gate`，而不是再做更大范围 prompt 扩展。
-
-4. 结果说明材料仍需整理成结项交付件  
-仓库中已有大量实验结果，但还需要进一步压缩为面向导师评审与结项提交的说明材料、截图和展示页面。
-
-下一步建议如下：
-
-1. 以 `Adapter baseline` 作为结项主对照配置，按需展示 `g4` 作为 `WT-only continuity` 的机制样例。
-2. 保留 `g0` 作为研究参考组，用于说明“高收益但误触发更多”的技术权衡。
-3. 若仍有少量实验空间，优先分析 `WT missing_box` 长段传播导致的 `harm` 病例，不建议再回到全类 continuity 或大规模扫参。
-4. 将当前结果整理为图文并茂的结项材料，而不是继续扩展新的算法分支。
-
-## 结项材料清单
-
-建议按“科技实物”路线准备以下结项材料：
-
-1. 软件原型  
-包含结项展示版 Web 系统或可运行的本地展示原型，能够完成病例浏览、结果查看与三维预览。
-
-2. 使用说明  
-提供不少于 1000 字的中文使用说明，内容包括环境要求、目录结构、启动方法、病例查看方式、结果解释与注意事项。
-
-3. 运行截图或压缩包  
-至少准备 2 到 3 张运行截图，或提供包含 HTML 预览与结果页面的压缩包，便于答辩与提交。
-
-4. 核心结果说明  
-整理一份简明结果说明，冻结以下内容：
-- 系统闭环已经完成；
-- `Adapter baseline` 已固定为当前默认口径，`LoRA baseline` 保留为历史对照；
-- 全类 `smooth / interpolate` 无稳定收益；
-- `WT-only continuity` 已成立；
-- `g4` 仅作为 `WT-only continuity` 的机制验证对照配置；
-- 当前主要收益来自 `WT missing_box` 补救。
-
-5. 待补材料
-
-- 若结项要求提供完整 Web 部署文档、数据库表设计或演示视频，当前仓库内对应材料待补；
-- 若需补充更多训练曲线图、病例级对比图或正式答辩 PPT，当前可基于现有 `outputs` 与 `README` 继续整理。
+> 项目已经完成从训练验证到整病例自动分割闭环的推进，并在 `Adapter` 口径下补齐了正式 baseline/g4 证据链。多类别差异化 Prompt 路线已经成立，当前剩余主要问题已收敛到 ET 分支；因此，结项阶段应以 `Adapter baseline` 作为默认标准方案，以 `class_boxes_points + ET default` 作为多类别分析方案，以 `Adapter g4` 作为 `WT-only continuity` 的机制展示方案，围绕现有图表与定性结果完成最终展示与说明。

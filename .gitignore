@@ -184,10 +184,12 @@ datasets/
 #   .trellis/spec/ 和 .trellis/tasks/ 提交（团队共享知识）
 #   .trellis/scripts/ workspace/ .developer 忽略（本地/运行时）
 # ---------------------------------------------------------------------------
-.agents/
+# 生成的 agent 文件保持本地，仅放行项目自有共享 skill。
+.agents
 .claude/
 .codex/
 CLAUDE.md
+AGENTS.md
 
 .trellis/scripts/
 .trellis/workspace/
@@ -196,15 +198,7 @@ CLAUDE.md
 # ---------------------------------------------------------------------------
 # 报告相关生成物（保留已提交的 report/*.md）
 # ---------------------------------------------------------------------------
-/report/实物图片/
-/report/答辩PPT/
-/report/说明书/
-/report/论文/
-/report/查重报告.zip
-/report/_draft_pdf.txt
-/report/三维后处理指标提升补充说明.md
-/report/项目报告书提交版文案.md
-/report/项目说明书提交版文案.md
+/report
 
 # ---------------------------------------------------------------------------
 # 图表生成物

@@ -58,7 +58,7 @@ pip install -r requirements.txt
 - checkpoint：`workdir_multi_task/models/finetune_adapter/best_model.pth`
 - `finetune_method`：`adapter`
 
-这套默认配置已经与 `report/adapter_verification.md` 中补齐的正式 Adapter 验证保持一致：默认展示组使用 `Adapter baseline`；`g4` 继续保留为可选的 `WT-only continuity` 机制验证入口，但不替代 baseline 成为唯一默认。
+这套默认配置已经与当前正式 `Adapter baseline` 验证口径保持一致：默认展示组使用 `Adapter baseline`；`g4` 继续保留为可选的 `WT-only continuity` 机制验证入口，但不替代 baseline 成为唯一默认。
 
 ## 启动
 
