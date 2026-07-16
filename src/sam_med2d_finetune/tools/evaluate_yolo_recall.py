@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,9 @@ from sam_med2d_finetune.tools.train_yolo import (
     normalize_data_yaml,
     resolve_data_yaml,
 )
+
+
+DEFAULT_CONF_VALUES = "0.001,0.003,0.005,0.01,0.03,0.05,0.10"
 
 
 def parse_args():
@@ -32,7 +36,7 @@ def parse_args():
     )
     parser.add_argument(
         "--conf_values",
-        default="0.05,0.10,0.15,0.20,0.25,0.30",
+        default=DEFAULT_CONF_VALUES,
         help="Comma-separated confidence thresholds to scan.",
     )
     parser.add_argument(
@@ -60,7 +64,7 @@ def parse_args():
     parser.add_argument(
         "--max_det",
         type=int,
-        default=20,
+        default=1,
         help="Maximum number of detections per image.",
     )
     parser.add_argument(
@@ -109,10 +113,13 @@ def load_dataset_paths(data_arg, ultralytics_dir):
     normalized_yaml = normalize_data_yaml(data_yaml, ultralytics_dir)
     config = json.loads(json.dumps(yaml_safe_load(normalized_yaml)))
     dataset_root = Path(config["path"]).resolve()
+    dataset_manifest = dataset_root / "dataset_manifest.json"
     return {
         "data_yaml": data_yaml,
         "normalized_yaml": normalized_yaml,
         "dataset_root": dataset_root,
+        "dataset_manifest": dataset_manifest if dataset_manifest.is_file() else None,
+        "dataset_manifest_sha256": sha256_file(dataset_manifest) if dataset_manifest.is_file() else None,
     }
 
 
@@ -146,7 +153,8 @@ def load_ground_truth(label_dir):
                 raise ValueError(f"Invalid YOLO label line in {label_path}: {line}")
             _, xc, yc, w, h = parts
             boxes.append((float(xc), float(yc), float(w), float(h)))
-        gt_by_stem[label_path.stem] = boxes
+        if boxes:
+            gt_by_stem[label_path.stem] = boxes
     return gt_by_stem
 
 
@@ -191,6 +199,71 @@ def bbox_iou(box_a, box_b):
     return inter_area / union
 
 
+def bbox_intersection_over_gt(predicted_box, gt_box):
+    px1, py1, px2, py2 = normalized_xywh_to_xyxy(predicted_box)
+    gx1, gy1, gx2, gy2 = normalized_xywh_to_xyxy(gt_box)
+    inter_width = max(0.0, min(px2, gx2) - max(px1, gx1))
+    inter_height = max(0.0, min(py2, gy2) - max(py1, gy1))
+    gt_area = max(gx2 - gx1, 0.0) * max(gy2 - gy1, 0.0)
+    if gt_area <= 0.0:
+        return 0.0
+    return inter_width * inter_height / gt_area
+
+
+def bbox_area_ratio(predicted_box, gt_box):
+    px1, py1, px2, py2 = normalized_xywh_to_xyxy(predicted_box)
+    gx1, gy1, gx2, gy2 = normalized_xywh_to_xyxy(gt_box)
+    predicted_area = max(px2 - px1, 0.0) * max(py2 - py1, 0.0)
+    gt_area = max(gx2 - gx1, 0.0) * max(gy2 - gy1, 0.0)
+    return predicted_area / gt_area if gt_area > 0.0 else 0.0
+
+
+def prediction_xywh(prediction):
+    if isinstance(prediction, dict):
+        return tuple(float(value) for value in prediction["xywh"])
+    return tuple(float(value) for value in prediction)
+
+
+def parse_slice_stem(stem):
+    case_id, separator, z_value = stem.rpartition("_z")
+    if not separator or not case_id or not z_value.isdigit():
+        raise ValueError(f"Invalid BraTS YOLO slice stem: {stem}")
+    return case_id, int(z_value)
+
+
+def longest_consecutive_misses(slice_results, key):
+    longest = 0
+    current = 0
+    previous_z = None
+    for item in sorted(slice_results, key=lambda entry: entry["z_index"]):
+        z_index = item["z_index"]
+        if previous_z is not None and z_index != previous_z + 1:
+            current = 0
+        if item[key]:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+        previous_z = z_index
+    return longest
+
+
+def best_positive_slice_match(gt_boxes, predictions):
+    best_iou = 0.0
+    best_coverage = 0.0
+    best_area_ratio = None
+    for gt_box in gt_boxes:
+        for prediction in predictions:
+            predicted_box = prediction_xywh(prediction)
+            current_iou = bbox_iou(gt_box, predicted_box)
+            current_coverage = bbox_intersection_over_gt(predicted_box, gt_box)
+            best_iou = max(best_iou, current_iou)
+            if best_area_ratio is None or current_coverage > best_coverage:
+                best_coverage = current_coverage
+                best_area_ratio = bbox_area_ratio(predicted_box, gt_box)
+    return best_iou, best_coverage, best_area_ratio
+
+
 def evaluate_predictions(predictions_by_stem, gt_by_stem, image_stems):
     positive_stems = [stem for stem in image_stems if stem in gt_by_stem]
     negative_stems = [stem for stem in image_stems if stem not in gt_by_stem]
@@ -201,9 +274,13 @@ def evaluate_predictions(predictions_by_stem, gt_by_stem, image_stems):
     hit_iou_01 = 0
     hit_iou_03 = 0
     hit_iou_05 = 0
+    hit_coverage_05 = 0
+    hit_coverage_08 = 0
     false_positive_slices = 0
     total_positive_boxes = 0
     total_negative_boxes = 0
+    matched_area_ratios = []
+    positive_results_by_case = {}
 
     for stem in positive_stems:
         predicted_boxes = predictions_by_stem.get(stem, [])
@@ -211,16 +288,29 @@ def evaluate_predictions(predictions_by_stem, gt_by_stem, image_stems):
         if predicted_boxes:
             hit_any += 1
         gt_boxes = gt_by_stem[stem]
-        best_iou = 0.0
-        for gt_box in gt_boxes:
-            for pred_box in predicted_boxes:
-                best_iou = max(best_iou, bbox_iou(gt_box, pred_box))
+        best_iou, best_coverage, best_area_ratio = best_positive_slice_match(gt_boxes, predicted_boxes)
         if best_iou >= 0.10:
             hit_iou_01 += 1
         if best_iou >= 0.30:
             hit_iou_03 += 1
         if best_iou >= 0.50:
             hit_iou_05 += 1
+        if best_coverage >= 0.50:
+            hit_coverage_05 += 1
+        if best_coverage >= 0.80:
+            hit_coverage_08 += 1
+        if best_area_ratio is not None:
+            matched_area_ratios.append(best_area_ratio)
+
+        case_id, z_index = parse_slice_stem(stem)
+        positive_results_by_case.setdefault(case_id, []).append({
+            "z_index": z_index,
+            "has_box": bool(predicted_boxes),
+            "best_iou": best_iou,
+            "best_coverage": best_coverage,
+            "missed_any_box": not bool(predicted_boxes),
+            "missed_coverage_0.50": best_coverage < 0.50,
+        })
 
     for stem in negative_stems:
         predicted_boxes = predictions_by_stem.get(stem, [])
@@ -231,6 +321,36 @@ def evaluate_predictions(predictions_by_stem, gt_by_stem, image_stems):
     def safe_div(numerator, denominator):
         return float(numerator) / float(denominator) if denominator else 0.0
 
+    per_case = []
+    for case_id, slice_results in sorted(positive_results_by_case.items()):
+        coverage_hit_count = sum(item["best_coverage"] >= 0.50 for item in slice_results)
+        any_box_count = sum(item["has_box"] for item in slice_results)
+        per_case.append({
+            "case_id": case_id,
+            "positive_slice_count": len(slice_results),
+            "any_box_hit_count": any_box_count,
+            "coverage_0.50_hit_count": coverage_hit_count,
+            "coverage_0.50_recall": safe_div(coverage_hit_count, len(slice_results)),
+            "fully_missed_any_box": any_box_count == 0,
+            "fully_missed_coverage_0.50": coverage_hit_count == 0,
+            "max_consecutive_any_box_misses": longest_consecutive_misses(
+                slice_results,
+                "missed_any_box",
+            ),
+            "max_consecutive_coverage_0.50_misses": longest_consecutive_misses(
+                slice_results,
+                "missed_coverage_0.50",
+            ),
+        })
+
+    fully_missed_case_ids = [
+        item["case_id"] for item in per_case if item["fully_missed_coverage_0.50"]
+    ]
+    max_consecutive_misses = max(
+        (item["max_consecutive_coverage_0.50_misses"] for item in per_case),
+        default=0,
+    )
+
     return {
         "num_positive_slices": positive_count,
         "num_negative_slices": negative_count,
@@ -238,14 +358,25 @@ def evaluate_predictions(predictions_by_stem, gt_by_stem, image_stems):
         "slice_recall_iou_0.10": safe_div(hit_iou_01, positive_count),
         "slice_recall_iou_0.30": safe_div(hit_iou_03, positive_count),
         "slice_recall_iou_0.50": safe_div(hit_iou_05, positive_count),
+        "slice_coverage_recall_0.50": safe_div(hit_coverage_05, positive_count),
+        "slice_coverage_recall_0.80": safe_div(hit_coverage_08, positive_count),
+        "missed_positive_slice_count_coverage_0.50": positive_count - hit_coverage_05,
+        "fully_missed_case_count": len(fully_missed_case_ids),
+        "fully_missed_case_ids": fully_missed_case_ids,
+        "max_consecutive_missed_positive_slices": max_consecutive_misses,
         "background_false_positive_rate": safe_div(false_positive_slices, negative_count),
         "avg_boxes_per_positive_slice": safe_div(total_positive_boxes, positive_count),
         "avg_boxes_per_negative_slice": safe_div(total_negative_boxes, negative_count),
+        "mean_predicted_gt_box_area_ratio": safe_div(
+            sum(matched_area_ratios),
+            len(matched_area_ratios),
+        ),
         "hit_any_count": hit_any,
         "hit_iou_0.10_count": hit_iou_01,
         "hit_iou_0.30_count": hit_iou_03,
         "hit_iou_0.50_count": hit_iou_05,
         "false_positive_slices": false_positive_slices,
+        "per_case": per_case,
     }
 
 
@@ -269,10 +400,62 @@ def run_predict(model, image_dir, conf, iou, imgsz, device, max_det, batch):
         if result.boxes is not None and len(result.boxes) > 0:
             image_height, image_width = result.orig_shape
             xyxy_values = result.boxes.xyxy.cpu().tolist()
-            for box_xyxy in xyxy_values:
-                boxes.append(yolo_xyxy_to_normalized_xywh(box_xyxy, image_width, image_height))
+            confidence_values = result.boxes.conf.cpu().tolist()
+            class_values = result.boxes.cls.cpu().tolist()
+            for box_xyxy, confidence, class_id in zip(
+                xyxy_values,
+                confidence_values,
+                class_values,
+            ):
+                boxes.append({
+                    "xywh": list(
+                        yolo_xyxy_to_normalized_xywh(box_xyxy, image_width, image_height)
+                    ),
+                    "confidence": float(confidence),
+                    "class_id": int(class_id),
+                })
         predictions[stem] = boxes
     return predictions
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _float_token(value):
+    return f"{float(value):.6g}".replace("-", "m").replace(".", "p")
+
+
+def write_prediction_export(out_dir, predictions, image_stems, metadata):
+    prediction_dir = Path(out_dir) / "predictions"
+    prediction_dir.mkdir(parents=True, exist_ok=True)
+    file_name = f"iou_{_float_token(metadata['iou'])}_conf_{_float_token(metadata['conf'])}.json"
+    prediction_path = prediction_dir / file_name
+    slices = []
+    case_ids = set()
+    for stem in image_stems:
+        case_id, z_index = parse_slice_stem(stem)
+        case_ids.add(case_id)
+        slices.append({
+            "stem": stem,
+            "case_id": case_id,
+            "z_index": z_index,
+            "boxes": predictions.get(stem, []),
+        })
+    payload = {
+        "schema_version": 1,
+        **metadata,
+        "case_count": len(case_ids),
+        "case_ids": sorted(case_ids),
+        "slice_count": len(slices),
+        "slices": slices,
+    }
+    prediction_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return prediction_path, sha256_file(prediction_path)
 
 
 def write_scan_outputs(out_dir, payload):
@@ -291,9 +474,15 @@ def write_scan_outputs(out_dir, payload):
         "slice_recall_iou_0.10",
         "slice_recall_iou_0.30",
         "slice_recall_iou_0.50",
+        "slice_coverage_recall_0.50",
+        "slice_coverage_recall_0.80",
+        "missed_positive_slice_count_coverage_0.50",
+        "fully_missed_case_count",
+        "max_consecutive_missed_positive_slices",
         "background_false_positive_rate",
         "avg_boxes_per_positive_slice",
         "avg_boxes_per_negative_slice",
+        "mean_predicted_gt_box_area_ratio",
         "hit_any_count",
         "hit_iou_0.10_count",
         "hit_iou_0.30_count",
@@ -301,6 +490,8 @@ def write_scan_outputs(out_dir, payload):
         "false_positive_slices",
         "num_positive_slices",
         "num_negative_slices",
+        "prediction_file",
+        "prediction_sha256",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -321,32 +512,34 @@ def choose_recommendation(results):
     sorted_results = sorted(
         results,
         key=lambda item: (
-            item["slice_recall_any_box"],
-            item["slice_recall_iou_0.30"],
-            -item["background_false_positive_rate"],
-            -item["avg_boxes_per_positive_slice"],
-            -item["iou"],
-            -item["conf"],
+            item["fully_missed_case_count"],
+            item["missed_positive_slice_count_coverage_0.50"],
+            item["max_consecutive_missed_positive_slices"],
+            -item["slice_coverage_recall_0.50"],
+            item["background_false_positive_rate"],
+            -item["mean_predicted_gt_box_area_ratio"],
+            item["iou"],
+            item["conf"],
         ),
-        reverse=True,
     )
     return sorted_results[0]
 
 
-def choose_topk(results, top_k=5):
+def choose_topk(results, top_k=2):
     if top_k <= 0:
         return []
     sorted_results = sorted(
         results,
         key=lambda item: (
-            item["slice_recall_any_box"],
-            item["slice_recall_iou_0.30"],
-            -item["background_false_positive_rate"],
-            -item["avg_boxes_per_positive_slice"],
-            -item["iou"],
-            -item["conf"],
+            item["fully_missed_case_count"],
+            item["missed_positive_slice_count_coverage_0.50"],
+            item["max_consecutive_missed_positive_slices"],
+            -item["slice_coverage_recall_0.50"],
+            item["background_false_positive_rate"],
+            -item["mean_predicted_gt_box_area_ratio"],
+            item["iou"],
+            item["conf"],
         ),
-        reverse=True,
     )
     return sorted_results[:top_k]
 
@@ -381,8 +574,11 @@ def build_scan_markdown(payload):
             "",
             f"- IoU: `{_format_metric(recommendation['iou'])}`",
             f"- Conf: `{_format_metric(recommendation['conf'])}`",
-            f"- Slice recall any box: `{_format_metric(recommendation['slice_recall_any_box'])}`",
-            f"- Slice recall IoU@0.30: `{_format_metric(recommendation['slice_recall_iou_0.30'])}`",
+            f"- Fully missed cases: `{recommendation['fully_missed_case_count']}`",
+            "- Missed positive slices at coverage 0.50: "
+            f"`{recommendation['missed_positive_slice_count_coverage_0.50']}`",
+            f"- Maximum consecutive misses: `{recommendation['max_consecutive_missed_positive_slices']}`",
+            f"- Slice coverage recall @0.50: `{_format_metric(recommendation['slice_coverage_recall_0.50'])}`",
             f"- Background false positive rate: `{_format_metric(recommendation['background_false_positive_rate'])}`",
             "",
         ])
@@ -391,38 +587,42 @@ def build_scan_markdown(payload):
         lines.extend([
             "## Top Candidates",
             "",
-            "| Rank | IoU | Conf | Recall Any | Recall IoU@0.30 | BG FP Rate | Avg Boxes/Positive |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Rank | IoU | Conf | Fully Missed Cases | Missed Slices | "
+            "Max Consecutive | Coverage@0.50 | BG FP Rate | Area Ratio |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for index, item in enumerate(shortlist, start=1):
             lines.append(
                 f"| {index} | "
                 f"{_format_metric(item['iou'])} | "
                 f"{_format_metric(item['conf'])} | "
-                f"{_format_metric(item['slice_recall_any_box'])} | "
-                f"{_format_metric(item['slice_recall_iou_0.30'])} | "
+                f"{item['fully_missed_case_count']} | "
+                f"{item['missed_positive_slice_count_coverage_0.50']} | "
+                f"{item['max_consecutive_missed_positive_slices']} | "
+                f"{_format_metric(item['slice_coverage_recall_0.50'])} | "
                 f"{_format_metric(item['background_false_positive_rate'])} | "
-                f"{_format_metric(item['avg_boxes_per_positive_slice'])} |"
+                f"{_format_metric(item['mean_predicted_gt_box_area_ratio'])} |"
             )
         lines.append("")
 
     lines.extend([
         "## Full Grid",
         "",
-        "| IoU | Conf | Recall Any | Recall IoU@0.10 | Recall IoU@0.30 | Recall IoU@0.50 | BG FP Rate | Avg Boxes/Positive | Avg Boxes/Negative |",
+        "| IoU | Conf | Fully Missed Cases | Missed Slices | Max Consecutive | "
+        "Coverage@0.50 | Coverage@0.80 | BG FP Rate | Area Ratio |",
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ])
     for item in payload["results"]:
         lines.append(
             f"| {_format_metric(item['iou'])} | "
             f"{_format_metric(item['conf'])} | "
-            f"{_format_metric(item['slice_recall_any_box'])} | "
-            f"{_format_metric(item['slice_recall_iou_0.10'])} | "
-            f"{_format_metric(item['slice_recall_iou_0.30'])} | "
-            f"{_format_metric(item['slice_recall_iou_0.50'])} | "
+            f"{item['fully_missed_case_count']} | "
+            f"{item['missed_positive_slice_count_coverage_0.50']} | "
+            f"{item['max_consecutive_missed_positive_slices']} | "
+            f"{_format_metric(item['slice_coverage_recall_0.50'])} | "
+            f"{_format_metric(item['slice_coverage_recall_0.80'])} | "
             f"{_format_metric(item['background_false_positive_rate'])} | "
-            f"{_format_metric(item['avg_boxes_per_positive_slice'])} | "
-            f"{_format_metric(item['avg_boxes_per_negative_slice'])} |"
+            f"{_format_metric(item['mean_predicted_gt_box_area_ratio'])} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -439,11 +639,16 @@ def main():
     image_paths = sorted(image_dir.glob("*.png"))
     image_stems = [path.stem for path in image_paths]
     gt_by_stem = load_ground_truth(label_dir)
+    if len(image_stems) != len(set(image_stems)):
+        raise ValueError(f"Duplicate image stems found in split: {args.split}")
 
     from ultralytics import YOLO
 
     model = YOLO(str(Path(args.model).resolve()))
+    model_sha256 = sha256_file(args.model)
 
+    model_name = Path(args.model).stem
+    out_dir = Path(args.out_dir) / f"{model_name}_{args.split}"
     results = []
     for iou in iou_values:
         for conf in conf_values:
@@ -460,18 +665,42 @@ def main():
             metrics = evaluate_predictions(predictions, gt_by_stem, image_stems)
             metrics["iou"] = float(iou)
             metrics["conf"] = float(conf)
+            prediction_path, prediction_sha256 = write_prediction_export(
+                out_dir,
+                predictions,
+                image_stems,
+                {
+                    "model": str(Path(args.model).resolve()),
+                    "model_sha256": model_sha256,
+                    "dataset_root": str(dataset_info["dataset_root"]),
+                    "dataset_manifest": str(dataset_info["dataset_manifest"])
+                    if dataset_info["dataset_manifest"]
+                    else None,
+                    "dataset_manifest_sha256": dataset_info["dataset_manifest_sha256"],
+                    "split": args.split,
+                    "imgsz": int(args.imgsz),
+                    "max_det": int(args.max_det),
+                    "iou": float(iou),
+                    "conf": float(conf),
+                },
+            )
+            metrics["prediction_file"] = str(prediction_path.resolve())
+            metrics["prediction_sha256"] = prediction_sha256
             results.append(metrics)
 
     recommendation = choose_recommendation(results)
     recommended_topk = choose_topk(results)
 
-    model_name = Path(args.model).stem
-    out_dir = Path(args.out_dir) / f"{model_name}_{args.split}"
     payload = {
         "model": str(Path(args.model).resolve()),
+        "model_sha256": model_sha256,
         "data_yaml": str(dataset_info["data_yaml"]),
         "normalized_data_yaml": str(dataset_info["normalized_yaml"]),
         "dataset_root": str(dataset_info["dataset_root"]),
+        "dataset_manifest": str(dataset_info["dataset_manifest"])
+        if dataset_info["dataset_manifest"]
+        else None,
+        "dataset_manifest_sha256": dataset_info["dataset_manifest_sha256"],
         "split": args.split,
         "imgsz": int(args.imgsz),
         "iou_values": [float(value) for value in iou_values],
