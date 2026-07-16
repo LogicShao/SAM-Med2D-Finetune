@@ -95,3 +95,57 @@ The pre-A0 validity fixes are implemented and validated on the GPU1 server.
 
 The B1 launch gate is therefore passed. The next action is exactly one
 five-epoch A0 trajectory with immutable snapshots at epochs 1, 3 and 5.
+
+## Isolated DataLoader Profile (2026-07-13)
+
+The training profiler was extended to separate CPU batch wait, host-to-device
+(H2D) copy and GPU compute. It also exposes explicit `non_blocking_transfer`,
+`persistent_workers` and `prefetch_factor` controls. All measurements below
+use the cached development train view, GPU1, batch 4, two workers, AMP off,
+cuDNN off, 100 updates per epoch, and compare the second epoch to exclude
+startup effects.
+
+| Profile | CPU batch wait | H2D | GPU compute | samples/s | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Existing loader | 12.7 ms | 0.9 ms | 416.3 ms | 8.71 | Reference |
+| + non-blocking H2D | 5.7 ms | 0.3 ms | 416.2 ms | 8.89 | +2.0% |
+| + persistent workers, prefetch 4 | 2.8 ms | 0.2 ms | 406.1 ms | 9.18 | +5.4% |
+
+The small H2D cost shows that CUDA transfer is not the bottleneck. Persistent
+workers reduce CPU batch starvation across epochs; the observed gain is real
+but modest because GPU compute dominates each update. Do not retrofit this
+loader setting into the completed A0 trajectory: changing persistent worker
+lifetime changes cross-epoch augmentation/sample RNG consumption. Re-run A0
+with the selected setting before using it in A1--A3, or keep the current
+batch-4/two-worker configuration frozen for the primary ablation. Increasing
+workers beyond two remains out of scope because it conflicts with the verified
+server stability policy.
+
+## Compute-Graph Stop Gate (2026-07-13)
+
+A 20-step GPU1 stage profile with the cached batch-4 configuration measured
+0.566 s mean GPU compute per update: image encoder 0.180 s (32%), all three
+serial prompt/decoder/loss passes 0.095 s (17%), and backward plus optimizer
+0.291 s (51%). H2D remained 1.4 ms.
+
+The only nontrivial graph-level candidate is batching ET/TC/WT prompt/decoder
+passes together. Even an impossible zero-cost implementation has a 17% upper
+bound, while a real implementation must repeat image embeddings and adds
+memory pressure and numerical-equivalence risk. Reducing the dominant
+backward/optimizer cost would require freezing trainable model components or
+enabling AMP/cuDNN, which changes the method or violates the proven server
+stability policy. Stop performance optimization here. Keep the completed A0
+configuration frozen and proceed with 43-case raw 3D checkpoint selection,
+then B2 and the A1--A3 ablation.
+
+## Invalid Oracle-Selection Attempt (2026-07-13)
+
+Do not use the preliminary epoch-001 aggregate of 0.8127 Mean Dice. Although
+the batch evaluation command supplied `prompt_mode=upper_bound`, its saved
+prompt-source aggregate reported `yolo_box` for WT, TC and ET. The remote
+evaluator therefore did not use the intended oracle provider. The run was
+stopped before completion of the three-checkpoint comparison. Before
+checkpoint selection is retried, verify the provider map and synchronize the
+corrected inference and batch-evaluation modules to the training server; the
+saved prompt-source aggregate must identify ground-truth/oracle prompts for
+every class.

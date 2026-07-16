@@ -3,7 +3,7 @@
   "name": "diagnose-prompt-and-postprocess-gap",
   "title": "量化自动提示与后处理误差来源",
   "description": "完成 oracle/jittered/YOLO prompt 分解，以及 raw、hierarchy-only、morphology-only、full-post 的对照。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -20,7 +20,18 @@
   "subtasks": [],
   "children": [],
   "parent": "07-13-icassp-2027-hierarchical-prompt-segmentation",
-  "relatedFiles": [],
-  "notes": "",
+  "relatedFiles": [
+    "src/sam_med2d_finetune/tools/prepare_yolo_data.py",
+    "src/sam_med2d_finetune/tools/train_yolo.py",
+    "src/sam_med2d_finetune/tools/evaluate_yolo_recall.py",
+    "src/sam_med2d_finetune/brats/case.py",
+    "src/sam_med2d_finetune/inference/config.py",
+    "src/sam_med2d_finetune/inference/volume.py",
+    "src/sam_med2d_finetune/inference/batch_validate.py",
+    "tests/test_prepare_yolo_data.py",
+    "tests/test_yolo_protocol.py",
+    "tests/test_frozen_yolo_prompts.py"
+  ],
+  "notes": "YOLO is frozen once and reused across all SAM methods and seeds. Test data remains locked until both detector and SAM settings are frozen.",
   "meta": {}
 }

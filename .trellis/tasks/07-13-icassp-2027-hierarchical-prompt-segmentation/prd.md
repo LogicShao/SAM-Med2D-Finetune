@@ -1,474 +1,680 @@
 # ICASSP 2027: Hierarchical Prompt-Robust Brain Tumor Segmentation
 
+## Working Thesis
+
+Under a frozen automatic-prompt protocol, prompt-jitter training and explicit
+hierarchy supervision can reduce SAM-Med2D's raw 3D performance gap between
+oracle and automatic boxes without relying on postprocessing or materially
+degrading ET segmentation.
+
+This is a falsifiable working thesis, not a result claim. Numerical language
+such as "closes 60% of the gap" must not enter the title, abstract, or
+conclusion until it is supported by the locked-test results.
+
 ## Goal
 
-Convert the existing SAM-Med2D engineering pipeline into a reproducible
-research contribution for ICASSP 2027. The paper must evaluate a training
-method rather than attribute most gains to prompt heuristics and 3D
-postprocessing.
+Convert the existing SAM-Med2D pipeline into a reproducible ICASSP 2027
+training-method contribution. The paper must establish whether robustness to
+automatic prompts and voxelwise tumor hierarchy can be learned, rather than
+attribute gains to detector tuning, prompt heuristics, or 3D postprocessing.
 
 ## Audited Baseline Facts
 
-- The current multi-task Adapter checkpoint was trained with independent
-  class-specific ground-truth boxes. Training validation reports a slice-level
-  mean Dice of 0.7560.
-- Whole-volume automatic-prompt evaluation reports 0.5104 raw and 0.5460 post
-  mean Dice on 167 cases. The raw-to-post gain is 0.0357.
-- The 167 cases are all drawn from `data_brats_raw/val`, which is also used for
-  Adapter early stopping. They are not an independent test result.
-- The current manifest is a patient-level, non-overlapping split of 875 train,
-  187 validation, and 189 test cases with seed 42.
-- Training uses per-slice min-max intensity normalization. Whole-volume
-  inference uses per-volume, nonzero-voxel min-max normalization.
-- Training keeps only tumor-positive slices, while inference scans full
-  volumes. Empty class masks in retained slices produce a zero-area box.
-- Inference uses YOLO boxes and a WT -> TC -> ET prompt cascade. This differs
-  materially from training with independent oracle boxes.
-- Current 3D hierarchy postprocessing expands TC with ET and WT with TC. It
-  does not improve ET directly. Morphology, connected-component filtering and
-  z-axis smoothing must be evaluated separately.
-- WT continuity is not a main-method candidate: on the 167-case evaluation it
-  has 1,249 rescue events versus 8,128 harmful events; its mean Dice gain is
-  +0.00143 with a bootstrap confidence interval crossing zero.
+- The current multi-task Adapter was trained with independent class-specific
+  ground-truth boxes and reports 0.7560 slice-level validation mean Dice.
+- Whole-volume automatic-prompt evaluation reports 0.5104 raw and 0.5460
+  postprocessed mean Dice on 167 cases, a raw-to-post gain of 0.0357.
+- Those 167 cases come from the validation pool used for early stopping and
+  are development evidence, not an independent test result.
+- The frozen patient-level split contains 875 train, 187 validation, and 189
+  test cases with seed 11171 and no patient overlap.
+- Training and inference currently differ in normalization, retained slices,
+  prompt source, and prompt dependency. These mismatches must be resolved or
+  measured before any method claim.
+- Existing hierarchy postprocessing expands TC with ET and WT with TC. It does
+  not directly improve ET and must be reported separately from raw output.
+- WT continuity is excluded as a primary method: its observed mean Dice gain
+  is +0.00143, its bootstrap interval crosses zero, and harmful events exceed
+  rescue events.
+- The predecessor's approximately 300 training epochs do not by themselves
+  establish overfitting. The defensible risks are its small sample, slice-level
+  evaluation, repeated validation-driven choices, and opaque checkpoint
+  selection. This work addresses those risks directly rather than treating an
+  epoch count as evidence.
+- Historical 20-train/4-validation experiments are development evidence only
+  and must not appear in the paper main table or support a final claim.
 
-## Research Hypothesis
+## Research Questions and Hypotheses
 
-Prompt-robust training and explicit voxelwise hierarchy supervision reduce the
-gap between oracle-box training and automatic-prompt whole-volume inference.
-The method should improve raw patient-level 3D segmentation, not merely post-
-processed output.
+### RQ1: Where is the automatic-prompt gap introduced?
 
-## Prior-Work Boundary and Submission Bar
+Using the same A0 checkpoint and cases, decompose performance under full-image,
+oracle, controlled-jitter, and frozen-YOLO prompts.
 
-The immediate predecessor is the IJCNN 2025 paper, formally published as
-*YOLO-Driven Prompt Generation for SAM-Based Brain Tumor Segmentation*
-(DOI: `10.1109/IJCNN64981.2025.11228325`). Its anonymous submission PDF is
-titled *Self-Prompt Segmentation Model for Brain Tumors*. It combines a frozen
-YOLO locator, three sampled point prompts, Adapter tuning, and label
-erosion/dilation. Its reported experiments are a 180-image 2D slice study that
-does not separately measure oracle versus automatic prompts, training/inference
-prompt mismatch, hierarchy violations, or the contribution of postprocessing.
+**H1:** Localization and missed-slice errors explain a measurable portion of
+the oracle-to-automatic raw 3D Dice gap.
 
-This work must therefore make a training-method claim, not repackage automatic
-prompt generation:
+### RQ2: Does prompt-jitter training improve automatic-prompt robustness?
 
-1. PJT addresses the detected oracle-to-automatic prompt domain gap.
-2. Hierarchy-aware supervision addresses the ET subset TC subset WT structure
-   during training instead of repairing it only after inference.
-3. The evidence is patient-level, raw 3D and paired against the current
-   Adapter under an identical frozen protocol.
+**H2:** A1 improves raw automatic-prompt 3D Dice over A0 under the same frozen
+detector predictions and checkpoint-selection rule.
 
-The target is a credible ICASSP B-tier submission, not an exhaustive medical
-segmentation benchmark. The minimum defensible paper needs a clear A0-to-A3
-ablation, an independent locked-test confirmation, a conventional same-protocol
-baseline, and error-source/postprocessing decomposition. nnU-Net, a third seed,
-and additional architectural variants improve the paper when time permits but
-must not delay validating or writing the central claim.
+### RQ3: Does hierarchy supervision improve raw nested-label consistency?
 
-## Method Scope
+**H3:** A2 reduces raw `ET & ~TC` and `TC & ~WT` violations without materially
+reducing ET Dice.
 
-Implement and evaluate exactly these training changes first:
+### RQ4: Which minimal candidate produces a defensible paper result?
 
-1. Shared preprocessing: use the same per-volume nonzero-voxel normalization
-   for training and inference.
-2. Prompt Jitter Training (PJT): perturb class boxes with translation and
-   scale jitter; simulate missed boxes and false-positive prompts with seeded,
-   configurable probabilities.
-3. Hierarchy-aware supervision: add a voxelwise soft violation loss
-   `mean(relu(p_et - p_tc) + relu(p_tc - p_wt))`, or an equivalent nested
-   probability parameterization that guarantees `ET subset TC subset WT`.
-4. Preserve the current Adapter model as the primary PEFT baseline. Do not add
-   a new backbone before the above ablation is complete.
+**H4:** At least one of A1, A2, or A3 produces a predeclared accuracy,
+prompt-robustness, or difficult-subregion signal on the development protocol;
+efficiency may strengthen but cannot replace that evidence. A3 is the planned
+combined method, but it is not promoted when a simpler A1 or A2 is stronger
+under the same frozen decision contract.
 
-Deferred unless the primary ablation shows a clear signal:
+## Claim Boundary
 
-- Scheduled-sampling prompts for the WT -> TC -> ET cascade.
-- 2.5D or 3D slice-consistency training.
+The immediate predecessor, IJCNN 2025 *YOLO-Driven Prompt Generation for
+SAM-Based Brain Tumor Segmentation* (`10.1109/IJCNN64981.2025.11228325`),
+combines a frozen YOLO locator, sampled point prompts, Adapter tuning, and
+label morphology in a small 2D slice study. It does not separately quantify
+oracle versus automatic prompts, training/inference prompt mismatch, hierarchy
+violations, or postprocessing contribution.
 
-Out of scope for the primary method:
+Nested ET/TC/WT constraints are established BraTS methodology: prior work has
+used architectural nesting, deterministic Tree-Min-style probability
+transformations, structured output parameterizations, and related hierarchy
+mechanisms. This paper must not claim invention of hierarchy-aware learning or
+of a generic hierarchy loss. Its narrower question is whether an
+architecture-preserving, label-preserving soft hinge penalty is sufficient in
+the frozen automatic-prompt Adapter setting compared with a canonical existing
+hierarchy mechanism.
 
-- Further threshold, padding, point-count, top-k, or WT-continuity grid search.
-- Presenting YOLO top-k, z-prompt interpolation, web UI, or a morphology chain
-  as the core research contribution.
+This work may claim:
 
-## Data and Evaluation Protocol
+1. Patient-level raw 3D measurement of the oracle-to-automatic prompt gap.
+2. A controlled PJT and hierarchy-supervision training ablation.
+3. Error-source and postprocessing decomposition under a frozen detector.
+4. Parameter-efficient automatic-prompt robustness when supported by results.
+5. Reduced severe automatic-prompt failures at preserved average accuracy when
+   supported by predeclared robustness and bad-case metrics.
+6. Non-inferior hierarchy-aware performance from a simpler plug-in penalty
+   relative to canonical Tree-Min only when the conditional A4 comparison and
+   its frozen uncertainty margin support that statement.
 
-1. Freeze `data_brats_paper_v1/split_manifest.json` as the only paper split.
-2. Use train for fitting, val for model selection and all method development,
-   and keep all 189 test cases blinded until the configuration is frozen.
-3. Persist the exact case IDs, source checkpoint hashes, CLI arguments,
-   environment, model parameter counts, wall-clock time and GPU memory.
-4. Make all stochastic operations deterministic for each declared seed.
-5. Run final primary results for two seeds at minimum. Run a third seed only
-   after the two-seed result is directionally consistent and the paper schedule
-   permits it.
-6. Evaluate each case in 3D: ET, TC and WT Dice; HD95; sensitivity;
-   specificity; hierarchy violation voxels and violation-case rate.
-7. Report raw and postprocessed results separately. The main performance table
-   must use raw results; postprocessing is a controlled secondary analysis.
-8. Compare paired per-case Dice with a two-sided Wilcoxon signed-rank test and
-   report mean +/- standard deviation across seeds.
+This work must not claim:
 
-### Full-Dataset Baseline Protocol
+- YOLO architecture or detector optimization as a contribution.
+- State-of-the-art BraTS segmentation without support from strong baselines.
+- A raw model gain when the improvement exists only after postprocessing.
+- Independent test performance from the historical 167-case validation run.
+- T1ce/T2/FLAIR as the optimal YOLO modality combination, or the four SAM
+  modalities as an experimentally optimal subset; modality selection is fixed,
+  not a contribution.
+- General BraTS state of the art unless a fully comparable formal benchmark
+  provides direct evidence.
+- Invention of hierarchy loss, Lagrangian optimization, or guaranteed nested
+  inference. The proposed term is a soft hinge penalty and may leave residual
+  violations.
 
-The Kaggle BRaTS 2021 Task 1 source is the only source for paper experiments.
-It contains 1,251 complete cases and is stored on the training server at
-`/opt/data/private/SAM-Med2D-Finetune/data_source/`. Each case has all five
-required files: `t1`, `t1ce`, `t2`, `flair`, and `seg`.
+The preferred claim boundary is the automatic-prompt domain gap, robustness to
+detector-generated prompts, and use of ET/TC/WT hierarchy during training. A
+small mean gain may support a claim that severe failures are reduced while
+average accuracy is preserved only when that outcome was selected through the
+predeclared fallback metrics below, not through post-hoc case selection.
 
-Create a new immutable paper split named `paper_v1` from that directory with
-the existing deterministic protocol:
+### Manuscript Positioning: Slice-Wise vs Volumetric Models
 
-| Split | Cases | Role |
+The manuscript must acknowledge established volumetric BraTS systems and then
+state the complementary research question: whether a slice-wise medical
+foundation model can become robust to imperfect automatic prompts under a
+frozen detector protocol. It must not imply that SAM cannot be adapted to 3D,
+that prompt quality is already proven to be the sole bottleneck, or that
+zero-shot generalization, annotation efficiency, clinical interpretability or
+clinical-workflow alignment was established without dedicated evidence.
+
+The conventional 2D U-Net is a matched-dimensionality reference and nnU-Net is
+a strong volumetric reference, not a theoretical upper bound. Because these
+model families also differ in architecture, pretraining, optimization and
+promptability, their comparisons contextualize but do not fully disentangle
+foundation-model and dimensionality effects.
+
+Before drafting the abstract, introduction, related work, results narrative,
+limitations or reviewer response, apply
+`.trellis/spec/guides/paper-positioning-thinking-guide.md` and the task-specific
+contract in
+`research/manuscript-positioning-2d-vs-3d-2026-07-16.md`.
+
+## Scope and Priority
+
+Priority is assigned by evidence needed for a defensible paper, not by
+implementation convenience.
+
+The target is a credible CCF-B ICASSP submission with defensible evidence, not
+an A-tier-scale exhaustive benchmark. Extra breadth must not weaken protocol
+discipline or delay the central automatic-prompt question.
+
+| Priority | Required work | Cut rule |
+| --- | --- | --- |
+| P0 | Frozen split and evaluator; A0; prompt-gap decomposition; one-seed A0/A1/A2/A3 development ablation; conditional A4 Tree-Min comparison when hierarchy remains claim-bearing; two-seed full A0/final-candidate confirmation; conventional 2D U-Net; raw/postprocess decomposition; paired statistics and bootstrap confidence intervals; locked test | Cannot be removed without changing the paper claim |
+| P1 | nnU-Net v2; third seed; multi-seed confirmation of nonselected ablation arms; expanded failure stratification | Run only after the central result and test protocol are frozen |
+| P2 | LoRA comparison; 2.5D consistency; scheduled-sampling cascade; additional prompt or postprocess variants | Exclude from the 60-day critical path |
+
+PJT and the architecture-preserving soft hierarchy penalty are the only primary
+method additions. Shared per-volume nonzero-voxel normalization is a protocol
+correction applied to all methods. The current Adapter remains the primary PEFT
+baseline. Canonical Tree-Min is an existing-method comparator, not a proposed
+contribution.
+
+The detector remains `yolo11m.pt` with T1ce/T2/FLAIR pseudo-RGB input and a
+recall-first operating point: oversized covering boxes are preferable to
+misses. It is trained once, frozen, and replayed for every SAM method and seed.
+SAM retains four-channel T1/T1ce/T2/FLAIR input. Neither modality choice is
+swept in this paper.
+
+Out of scope for the primary method are threshold grids, detector top-k,
+WT-continuity tuning, z-prompt interpolation, web UI changes, and morphology
+chains presented as model contributions.
+
+## Frozen Data Protocol
+
+The Kaggle BRaTS 2021 Task 1 source is the only paper dataset. Freeze
+`data_brats_paper_v1/split_manifest.json` as `paper_v1`:
+
+| Split | Cases | Permitted use |
 | --- | ---: | --- |
 | train | 875 | Fit SAM, YOLO, U-Net, and nnU-Net weights only |
-| val | 187 | All selection, thresholds, ablations, and early stopping |
-| test | 189 | Locked final evaluation only |
+| val | 187 | Model selection, detector operating point, ablations, and thresholds |
+| test | 189 | One locked final evaluation after all choices are frozen |
 
-Use seed 42, ratios 0.70 / 0.15 / 0.15, and archive the generated manifest
-hash with every run.
-Do not modify an old split or reuse an untracked list. A derived development
-subset may contain 200 train cases and 43 val cases only; it must be sampled
-from `paper_v1/train` and `paper_v1/val` with a recorded seed. Test cases must
-not appear in development paths, detector selection, threshold scans, prompt
-tuning, or qualitative-case selection before the final run.
+A development view may contain 200 train and 43 validation cases sampled only
+from the corresponding `paper_v1` partitions with a recorded seed. It is a
+compute-saving view, not a fourth experimental population.
 
-### Baseline Sequence and Gates
+The following are protocol invariants:
 
-1. **B0: data and runtime gate.** Verify all case files, manifest disjointness,
-   GPU1 visibility, environment versions, checkpoint SHA-256, model load, one
-   forward/backward/optimizer step, and a 1-epoch slice-limited run. Use
-   `use_amp=false`, `disable_cudnn=true`, `num_workers=2`, and GPU1 only.
-2. **B1: reproducibility baseline on development data.** Reproduce the current
-   multi-task Adapter with independent ground-truth class boxes. Report both
-   slice-level validation metrics and patient-level 3D raw metrics. This is the
-   oracle-prompt reference, not the paper headline.
-3. **B2: automatic-prompt baseline.** Train the one-class YOLO locator on
-   `paper_v1/train` only, select its score/NMS operating point on `paper_v1/val`,
-   and run the frozen Adapter with YOLO top-1 prompts on val. Report the gap
-   between oracle, jittered-oracle, and YOLO prompt conditions.
-4. **B3: proposed-method development.** On the development subset, compare
-   A0 current Adapter, A1 prompt jitter, A2 hierarchy loss, and A3 combined.
-   Promote only a clear raw-3D validation signal to the full train/val run.
-5. **B4: standardized medical baseline.** Run a conventional 2D U-Net under
-   the same split and patient-level 3D evaluator. Run nnU-Net v2 only after B3
-   has a clear signal and it fits the remaining schedule; it is a strengthening
-   reference, not a prerequisite for the paper's central ablation.
-6. **B5: final confirmation.** Run A0 and the selected proposed method for at
-   least two seeds on full train/val. Freeze every setting before evaluating the
-   189-case test set once per seed. Use paired case-level statistics and keep
-   postprocessing as a separate secondary table.
+1. No patient overlap exists across partitions.
+2. Test cases are absent from development paths, detector selection, threshold
+   scans, and qualitative-case selection before the final freeze record.
+3. Training and inference use the same per-volume nonzero-voxel normalization.
+4. Every stochastic operation is deterministic for its declared seed.
+5. Every run records split, code, checkpoint, configuration, and environment
+   identities as defined in `info.md`.
+6. Every formal comparison uses the same patient split, frozen YOLO prediction
+   files, prompt condition, and evaluator implementation unless the condition
+   itself is the explicitly named prompt-decomposition variable.
 
-Every run must record: split manifest SHA-256, code revision, base and
-finetuned checkpoint SHA-256, seed, CLI, GPU, environment package versions,
-wall-clock time, peak memory, raw metrics, and postprocessed metrics.
+## Evaluation Contract
 
-### Executable Baseline Plan
+All methods export predictions to the same patient-level native-grid 3D
+evaluator. Raw and postprocessed results are distinct result families.
 
-The dataset is now materialized on the server as symlinks, not copied data:
+### Metric Hierarchy
 
-| Dataset root | Cases | Permitted use |
-| --- | ---: | --- |
-| `data_brats_paper_v1/train` | 875 | Fit model weights only |
-| `data_brats_paper_v1/val` | 187 | Early stopping, threshold and method selection |
-| `data_brats_paper_v1/test` | 189 | One final, frozen evaluation per final seed |
-| `data_brats_paper_dev_v1/train` | 200 | Fast development only; sampled from paper train |
-| `data_brats_paper_dev_v1/val` | 43 | Fast development only; sampled from paper val |
+| Role | Metrics | Use |
+| --- | --- | --- |
+| Primary decision endpoint | Raw patient-level ET/TC/WT macro-Dice | Checkpoint selection, candidate promotion, paired significance; it cannot be replaced after results are seen |
+| Required class results | Raw ET, TC, and WT Dice reported separately | Detect subregion-specific benefit or regression hidden by the macro average |
+| Paper main table | Raw ET, TC, WT Dice and HD95 | Final method and baseline comparison |
+| Prompt robustness | Oracle-to-YOLO Dice gap; perturbation degradation curve or AUC; worst-quartile Dice; zero-Dice case count; severe-failure rate | Support Fallback B and quantify detector-generated prompt robustness |
+| Difficult-subregion guardrails | ET Dice, WT/TC Dice deltas, HD95 | Support Fallback C without hiding compensating regressions |
+| Hierarchy diagnostic | `ET outside TC`, `TC outside WT`, total violation voxels, violation-voxel ratio, and violation-case ratio | Explain structure; never sufficient alone because the hierarchy loss directly optimizes it |
+| Auxiliary efficiency | Trainable/total parameters, epochs or updates to selected checkpoint, wall-clock time, peak memory, inference cost | Support Fallback D only alongside non-inferior accuracy |
+| Secondary output | Postprocessed Dice and its delta from raw | Controlled analysis only; cannot rescue a raw failure or select a checkpoint |
+| Internal quality control | Sensitivity, specificity, predicted/GT voxel counts, empty-region status | Debugging and evaluator validation |
 
-Do not create an alternative split, random slice split, or a new test subset.
-The development subset is a compute-saving view of the paper split rather
-than a fourth experimental population.
+HD95 is reported in millimetres using native spacing but does not select a
+checkpoint. Undefined empty-surface pairs remain `not_applicable`; cases are
+never silently omitted from class-level summaries.
 
-| Phase | Run IDs | Data | Required output | Advance only when |
-| --- | --- | --- | --- | --- |
-| B0 | `b0_runtime_smoke` | dev 8 train slices / 4 val slices | model load, one epoch, log, checkpoint and curves | completed on GPU1 with `use_amp=false`, `disable_cudnn=true`, `num_workers=2` |
-| B0.5 | `b0_eval_contract`, `b0_throughput` | dev train/val | one 3D metrics JSON per case and measured updates/s, peak memory | all metrics and empty-mask rules are identical for SAM, U-Net and nnU-Net exports |
-| B1 | `a0_dev_oracle` | 200/43 dev | current Adapter, independent GT boxes, slice metrics and raw 3D val metrics | checkpoint selection is based on raw patient-level mean Dice, not slice Dice |
-| B2 | `a0_prompt_gap` | same 43 dev-val cases | no/full image, oracle, jittered oracle, YOLO top-1 raw 3D comparison | source of the oracle-to-automatic gap is quantified |
-| B3 | `a1_pjt_dev`, `a2_hier_dev`, `a3_combined_dev` | same dev split | A0/A1/A2/A3 ablation with fixed seeds | A3 improves raw 3D validation mean Dice and does not materially reduce ET Dice |
-| B4 | `unet2d_dev` (required), `nnunet_dev` (time permitting) | same dev split | conventional 2D U-Net raw 3D results; optional nnU-Net reference | evaluator agreement is checked on at least 10 common cases |
-| B5 | final A0, final A3, U-Net; optional nnU-Net | 875/187 then 189 test | two-seed minimum final results, statistics and separate postprocess table | all configuration values are frozen before test labels are read |
+Worst-quartile cases are the fixed 25% of development cases ranked by A0 raw
+macro-Dice, then reused for every candidate; each method must not redefine its
+own easiest or hardest quartile. A severe failure is initially defined as raw
+case macro-Dice below 0.20. Report zero-Dice counts per class and for case
+macro-Dice. Freeze the exact perturbation severity grid, AUC integration rule,
+quartile membership, severe-failure threshold, and any use of surface Dice on
+development before paper-test access. HD95 is the required boundary metric;
+surface Dice is optional only if its tolerance is predeclared.
+Define the per-case violation-voxel ratio as total unique violating voxels
+divided by the predicted ET/TC/WT union, with zero for an empty predicted union;
+freeze this denominator convention before comparison.
 
-`b0_runtime_smoke` passed on 2026-07-13: the one-epoch, eight-training-slice
-and four-validation-slice GPU1 run created its log, checkpoint and curves.
-Its validation Dice is only a pipeline-health signal because the sample is too
-small and not patient-level 3D evaluation.
+### Prompt Degradation AUC Contract
 
-`b0_eval_contract` and `b0_throughput` passed on 2026-07-13. The common
-`brats_metrics.py` evaluator now emits native-grid Dice, IoU, HD95 in mm,
-sensitivity, specificity, voxel counts, empty-region status, and hierarchy
-violations. Its unit tests cover identical masks, anisotropic HD95, empty-mask
-semantics, violations, and grid mismatch. A one-case native-grid inference
-smoke wrote complete JSON, CSV and Markdown results under
-`workdir_eval_contract/b0_eval_contract_native_grid` without using test data.
-The smoke checkpoint is intentionally not a performance result.
+The primary robustness AUC is not an area over YOLO confidence thresholds. It
+is the normalized area under the raw macro-Dice degradation curve for a fixed
+prompt perturbation family. For case `i`, family `f`, and frozen normalized
+severity levels `0 = s_0 < ... < s_K = 1`, define:
 
-The 100-update GPU1 benchmark used the full 200-case development training
-view (13,068 positive slices), batch size 1, two workers, AMP disabled and
-cuDNN disabled. The training segment took 25.4722 seconds (3.9259 updates/s)
-with 4,908.7 MiB peak allocated and 5,176.0 MiB peak reserved CUDA memory.
-The complete record is in
-`workdir_benchmark_gpu1/logs/b0_throughput_100steps_adapter/metrics.csv`.
-This is the initial capacity estimate, not a final-training time claim.
+```text
+degradation_i,f(s_k) = raw_macro_dice_i,f(0) - raw_macro_dice_i,f(s_k)
+pAUCdeg_i,f = trapezoid_integral(degradation_i,f(s_k), s_k)
+```
 
-### B1 Training-Input Decision
+Lower `pAUCdeg` is better; a negative value is retained when a perturbation
+improves a case. Compute it per case before aggregation so candidate-versus-A0
+comparisons remain paired. Report separate curves and `pAUCdeg` values for
+translation, expansion, contraction, independent-corner coordinate jitter,
+and prompt availability. The predeclared summary robustness endpoint is their
+unweighted mean after each family's severity axis is normalized to `[0, 1]`;
+all family-specific results remain visible. Prompt availability uses fixed,
+seeded withholding rates anchored to the observed frozen-YOLO miss and
+low-confidence rates. A confidence-threshold scan may diagnose the detector
+but cannot replace this AUC or become a fallback endpoint.
 
-Before B1, implement a measured input-pipeline change rather than reducing
-the frozen case split. The current dataset opens five compressed NIfTI files
-for every sampled slice, so it must be profiled before assuming the GPU is the
-sole bottleneck.
+For paired method comparisons, use identical case IDs and a two-sided
+Wilcoxon signed-rank test on per-case raw Dice. Report per-seed results and
+mean +/- standard deviation across seeds. Any additional hypothesis tests
+must be labelled secondary rather than promoted after seeing results.
+Report case-level paired bootstrap 95% confidence intervals for the primary
+raw macro-Dice delta and the selected fallback endpoint; a single decimal-point
+difference without paired uncertainty is not sufficient evidence.
 
-1. Build a versioned, per-case on-disk cache of per-volume nonzero-voxel
-   normalized four-modality tensors and segmentation labels. Keep online
-   spatial/intensity augmentation after cache loading.
-2. Add deterministic negative-slice sampling. Retain every tumor-positive
-   slice and support one tumor-negative slice for every three positive slices.
-   This is B0 input-pipeline infrastructure and the prescribed PJT setting,
-   not the A0 baseline setting. The ratio is an explicit CLI argument, not an
-   implicit dataset change.
-3. Profile each training epoch with mean data wait, mean GPU compute time,
-   CUDA peak memory, and optional sampled `nvidia-smi` GPU utilization. Run
-   the same short benchmark with the cache disabled and enabled before
-   choosing worker count or batch size.
-4. Do not reduce the 875-case final training split. The 200/43 development
-   view remains the only compute-saving dataset view for method selection.
+### Checkpoint and Overfitting Control
 
-Implementation and profile result (2026-07-13): the full 200/43 development
-cache contains 243 cases and occupies approximately 19 GB. The cache uses
-four-channel per-volume nonzero-minmax `float16` tensors and `uint8`
-segmentation labels, served through memory-mapped files. With otherwise equal
-GPU1 settings, cache reduced mean batch wait from 29.4 ms to 6.7 ms and
-increased batch-1 throughput from 4.111 to 4.458 updates/s. Batch 4 achieved
-14.018 samples/s and 52.3% sampled GPU utilization; batch 8 only reached
-16.041 samples/s while halving optimizer updates, so batch 4 is the current
-development default. The 1:3 positive-to-negative configuration produced
-13,068 positive and 4,353 negative slices, remained stable for 100 steps at
-batch 4, and reached 14.610 samples/s with 55.1% sampled GPU utilization.
-These are capacity measurements only, not segmentation results.
+- Save full training/validation curves, selected epoch or update number,
+  resolved configuration, checkpoint hash, and selection metadata for every
+  formal run.
+- Storage policy: keep only the selected `best_model.pth` for SAM Adapter runs
+  unless a short diagnostic explicitly requires extra snapshots. Extra epoch
+  snapshots are temporary diagnostic artifacts and must not be part of the
+  default A0-A3 launch contract.
+- Do not use a fixed 300-epoch convention, the final epoch, or the filename
+  `best_model.pth` as evidence of optimality. Use early stopping driven by raw
+  patient-level 3D development evaluation, or document that the development
+  stage is using slice-level `best_model.pth` as a pragmatic storage-limited
+  proxy rather than a paper-selected checkpoint.
+- Slice-level pooled Dice and loss are health/divergence diagnostics only. They
+  may trigger failure investigation but cannot select the paper checkpoint or
+  support the main result.
+- The current training entry point still writes `best_model.pth` and triggers
+  early stopping from slice-level `val_dice_mean`. Until patient-level
+  checkpoint selection is implemented, the automatic `best_model.pth` is only a
+  development checkpoint. It is acceptable for A0-A3 development iteration under
+  the storage-limited policy, but paper claims must label the selection rule
+  explicitly or replace it with the common raw 3D evaluator before locked test.
+- Paper test is run only after method, checkpoint rule, prompt protocol,
+  fallback route, thresholds, and analysis are frozen. Test never tunes a
+  method, detector setting, threshold, epoch budget, or checkpoint.
 
-#### Strategic Review Before B1
+### Gap-Closure Statistic
 
-The performance investigation is complete. Do not spend more paper time on
-batch 8, worker-count tuning, cache size tuning, AMP, cuDNN, or DDP unless the
-measured batch-4 throughput regresses materially. Batch 4, two workers and an
-eight-case mmap LRU are the frozen development defaults.
+After results exist, report the descriptive automatic-prompt gap closure as:
 
-The negative-slice implementation is validated infrastructure, but it must not
-be enabled in A0. A random box on an empty slice is false-positive prompt
-simulation and therefore belongs to PJT. Enabling it in A0 would contaminate
-the A0/A1 ablation. Use these definitions:
+```text
+gap_closed =
+    (candidate_auto_raw - A0_auto_raw)
+    / (A0_oracle_raw - A0_auto_raw)
+```
 
-| Run | Negative ratio | Negative prompt | Positive-box perturbation | Hierarchy loss |
-| --- | ---: | --- | --- | --- |
-| A0 | 0 | zero | none | none |
-| A1 | 1/3 | random | PJT enabled | none |
-| A2 | 0 | zero | none | enabled |
-| A3 | 1/3 | random | PJT enabled | enabled |
-
-This table overrides the earlier B0 pipeline-capacity suggestion for every
-A0--A3 paper result. Thus the completed A0 run uses all 13,068 positive
-development-training slices, no sampled empty slices and only independent
-oracle class boxes. Negative slices are deliberately introduced first in A1
-and A3, together with positive-box jitter, so their effect is attributable to
-PJT rather than hidden inside the baseline.
-
-Before launching A0, close three short reproducibility gaps:
-
-1. Add an explicit global training seed and seed Python, NumPy, Torch,
-   DataLoader shuffling/workers and augmentation randomness. `dataset_seed`
-   currently controls only negative-slice selection and negative boxes.
-2. Save immutable epoch snapshots. The current script only overwrites
-   `best_model.pth` according to slice-level validation Dice, so it cannot
-   support retrospective raw patient-level selection.
-3. Add a cache-contract test comparing cache tensors with the inference
-   per-volume nonzero-minmax path within the declared float16 tolerance, and
-   reject incompatible cache schema/dtype/shape metadata.
-
-Run A0 once for five epochs and save epochs 1, 3 and 5 from that single
-trajectory; do not launch three independent training jobs. Evaluate all three
-snapshots on all 43 development-validation cases with `upper_bound` prompts,
-postprocessing and HTML rendering disabled, and select by raw patient-level
-mean Dice with ET Dice as the guardrail. Slice-level validation is a health
-metric only.
-
-If epoch 5 is still more than 0.5 Dice point above epoch 3 and the trajectory is
-monotonically improving, extend the same run policy to at most epoch 8 or 10.
-Otherwise freeze the best of epochs 1, 3 and 5. Do not tune learning rate,
-negative ratio or augmentation during B1.
-
-For the later A0/A1/A2/A3 headline comparison, every method must use the same
-checkpoint-selection prompt condition and the same 43 validation cases. Do not
-select A0 with oracle prompts while selecting A3 with YOLO prompts in the same
-comparison table. Prefer frozen YOLO top-1 raw 3D Dice for the automatic-prompt
-headline after the B2 prompt-gap diagnostic is complete.
-
-The B1 launch gate passed on 2026-07-13 after server-side compilation, 12 unit
-tests and a GPU1 cached backward smoke. The smoke used the A0 input definition
-and wrote an immutable epoch snapshot while counting actual batch samples in
-the runtime CSV. It is a health check only, not a segmentation result.
-
-#### Evaluation Contract Before Any Baseline Claim
-
-Extend the common 3D evaluator before B1 beyond its current Dice/IoU output.
-For each ET, TC and WT mask it must produce Dice, HD95 in millimetres using
-the NIfTI affine/spacing, sensitivity, specificity, predicted/ground-truth
-voxel counts, and hierarchy violations (`ET & ~TC`, `TC & ~WT`). Preserve a
-machine-readable per-case CSV/JSON and a run-level summary. The evaluator
-must explicitly record these conventions:
-
-1. Resample each prediction to the original ground-truth grid before scoring;
-   do not score 256 x 256 training-space masks against native volumes.
-2. For an empty ground-truth region, score Dice and HD95 according to a single
-   documented BraTS-compatible rule and additionally report the number of such
-   cases. Never hide them by omitting cases from a class mean.
-3. Compute HD95 only with the native voxel spacing; report `not_applicable` for
-   a mathematically undefined empty-surface pair rather than substituting a
-   zero distance.
-4. Primary selection metric is unpostprocessed patient-level mean Dice over
-   ET/TC/WT. Per-class Dice, particularly ET, are co-primary guardrails.
-5. Thresholds, morphology parameters and detector operating points are chosen
-   only on `paper_v1/val`, then frozen and replayed on test unchanged.
-
-#### Compute-Aware Training Policy
-
-The GPU1 smoke establishes correctness but not the duration of a full run.
-Before scheduling any long baseline, run a fixed 100-update benchmark on the
-200-case development split with the exact image size, batch size and workers.
-Record updates/s, peak memory and positive-slice count. Use that measurement
-to set a wall-clock budget and epoch/step count; do not assume that 300 epochs
-is feasible merely because it was used by an earlier YOLO experiment.
-
-Long jobs run serially on GPU1. GPU0 may validate evaluator outputs on a small
-case set only. The order of expensive work is A0, prompt-gap diagnosis,
-PJT/hierarchy ablation, 2D U-Net, then optional nnU-Net. nnU-Net is a strong
-reference, not a gate for either the proposed-method ablation or the submission
-minimum; this preserves time for the paper's central prompt-robustness question
-if its full 3D training proves slow on an 11 GB GPU.
-
-## Compute Environment Constraint
-
-The available server has two RTX 2080 Ti GPUs, but its verified DDP gate
-conclusion is negative for long real-model runs. GPU0 is unstable for long
-training, AMP hangs, cuDNN is unstable in the existing YOLO environment, and
-the two GPUs have no peer access. Do not use DDP for paper experiments.
-
-Formal training policy:
-
-1. Use physical GPU1 only for all long SAM and YOLO training.
-2. Reserve GPU0 for short smoke tests or isolated evaluation only. Do not
-   report throughput collected while another GPU job is running.
-3. Build an isolated SAM environment; do not reuse the verified system Python
-   3.8 / Torch 1.14 YOLO environment. This repository imports `torch.amp` and
-   requires modern `numpy`, `scipy`, `pandas`, and `peft` versions that are not
-   compatible with that environment.
-4. Before a long run, pass a GPU1-only single-card gate: import, forward,
-   backward, optimizer step, 3 epochs, then 50 epochs using the exact planned
-   batch size and data-loader configuration.
-5. Make AMP, cuDNN policy, worker count and seeds explicit CLI options and log
-   them in each run. The current multi-task script defaults AMP to true and
-   hard-codes `num_workers=4`; it also does not consume `J3S2_DISABLE_CUDNN`.
-   These must be fixed and smoke-tested before relying on the server policy.
-6. Use `CUDA_LAUNCH_BLOCKING=1` only for diagnosis unless a GPU1 stability
-   gate demonstrates it is required. It serializes CUDA launches and should
-   not be assumed necessary for final throughput measurements.
-
-YOLO is allowed only as an automatic-prompt provider, trained solely on the
-frozen train split. Its model-selection data must be validation only; test
-labels may never be used for detector selection. Retain YOLO only if the
-oracle-box / jittered-box / YOLO-box diagnostic shows that it supports a
-credible automatic-prompt result. It is not a primary paper contribution.
+Report the numerator and denominator beside the percentage. Do not cap values
+or use this statistic when the oracle-to-automatic denominator is non-positive.
 
 ## Required Experimental Matrix
 
-### Diagnostic prompt decomposition
+### Prompt Decomposition (P0)
 
-Use the same frozen checkpoint and the same cases:
+Use one frozen A0 checkpoint and identical cases:
 
 | Condition | Purpose |
 | --- | --- |
-| Full-image or no-prompt baseline | Quantify intrinsic model behavior |
-| Oracle class boxes | Training-compatible prompt upper bound |
-| Jittered oracle boxes | Isolate localization robustness |
-| YOLO top-1 box | Automatic end-to-end baseline |
-| YOLO box plus class-specific prompts | Current pipeline behavior |
+| Oracle class boxes | Training-compatible upper bound |
+| Jittered oracle boxes | Controlled translation, scale, and coordinate-noise response |
+| Frozen YOLO top-1 box | Automatic end-to-end condition |
+| Full-image box / no-useful-prompt condition | Optional diagnosis when missing or low-confidence prompts need a lower reference |
 
-### Training ablation
+YOLO is a controlled prompt provider. Train it once, freeze one operating
+point, persist predictions, and replay the same files for every SAM method and
+seed. Its complete contract is owned by
+`../07-13-diagnose-prompt-and-postprocess-gap/prd.md`.
 
-| ID | Shared normalization | PJT | Hierarchy loss | Purpose |
-| --- | --- | --- | --- | --- |
-| A0 | Yes | No | No | Reproduced Adapter baseline |
-| A1 | Yes | Yes | No | Prompt robustness effect |
-| A2 | Yes | No | Yes | Hierarchy effect |
-| A3 | Yes | Yes | Yes | Proposed method |
+The fixed robustness evaluation must independently cover box translation,
+scale expansion and contraction, coordinate jitter, and missing/low-confidence
+prompt conditions. Use validation YOLO error distributions to define a small
+severity grid, then freeze it before candidate comparison. Report the
+oracle-to-YOLO gap, degradation curve or normalized AUC, worst-quartile Dice,
+zero-Dice count, severe-failure rate, HD95, hierarchy violations, and raw/post
+Dice for the predeclared conditions. These diagnostics do not authorize a
+YOLO, padding, confidence, or augmentation sweep.
 
-### Postprocessing ablation
+Build the severity grid from the complete 187-case `paper_v1/val` detector
+audit, not from the 43-case method-screen subset. Estimate translation and
+scale distributions from matched YOLO/oracle positive-slice pairs, but use a
+case-balanced empirical distribution: every contributing case has total weight
+one, divided equally among its eligible pairs, so large tumors do not dominate.
+Missed and low-confidence prompts are summarized separately rather than being
+discarded from the matched-pair distribution.
 
-For A0 and A3 report:
+With 187 validation cases, use only coarse nonzero levels at the case-balanced
+`q25`, `q50`, `q75`, and `q90` error magnitudes plus the zero-perturbation
+reference; do not create finer percentile bins. Report the number of eligible
+cases, matched pairs, misses, and a case-bootstrap interval for every quantile.
+If all 187 cases are not audited, a perturbation family has too few contributing
+cases for stable case-bootstrap quantiles, or adjacent quantiles are not
+distinguishable, collapse levels or use a predeclared fixed normalized grid
+instead of inventing finer bins. The prompt-gap child task must persist these
+decisions as a versioned `severity_grid.json` and point its Y4 output to this
+parent AUC contract before G2 closes.
 
-1. Raw predictions.
-2. Hierarchy projection only.
-3. Morphology and component filtering only.
-4. Full existing postprocessing.
+### Training Ablation (P0)
 
-## Comparator Requirements
+| ID | Shared normalization | Prompt jitter | Hierarchy mechanism | 200/43 single-seed screen | Full paper protocol |
+| --- | --- | --- | --- | --- | --- |
+| A0 | Yes | No | No | Required baseline | Required, multiple seeds |
+| A1 | Yes | Yes | No | Required candidate | Only if selected |
+| A2 | Yes | No | Soft hinge penalty | Required candidate | Only if selected |
+| A3 | Yes | Yes | Soft hinge penalty | Required candidate | Only if selected |
+| A4 | Yes | Match the selected A2/A3 hierarchy-bearing candidate | Canonical HSSN/Tree-Min transform | Conditional existing-method comparator | See A4 decision rule |
 
-Run all methods on the same frozen data protocol and report identical 3D
-metrics:
+All required methods use the same development cases, train budget, automatic
+prompt files, selection prompt condition, evaluator, and checkpoint-selection
+endpoint. A1, A3, and A4 when matched to A3 may introduce negative-slice prompt
+simulation; A0, A2, and A4 when matched to A2 must not silently receive that
+treatment.
 
-1. A conventional 2D U-Net as the required same-protocol reference.
-2. nnU-Net v2 as a preferred strong 3D reference when it can finish within the
-   paper schedule.
-3. SAM-Med2D frozen and Adapter. LoRA is supplementary only and must not delay
-   the A0-to-A3 comparison.
+Screen A0-A3 with one seed on the 200/43 development protocol. Select the
+strongest defensible candidate among A1, A2, and A3 using the frozen fallback
+gates; the combined A3 is not automatically preferred over a stronger simpler
+A1 or A2. Only A0 and that final candidate advance to full `paper_v1` training,
+multiple seeds, and locked-test confirmation. Do not run an open-ended loss,
+YOLO, modality, or augmentation sweep to manufacture a winner.
 
-If the proposed method remains substantially behind nnU-Net, position the
-paper as parameter-efficient automatic-prompt robustness rather than a
-state-of-the-art tumor segmentation claim.
+### Conditional Tree-Min Comparator (A4)
 
-## Research Reference
+A4 is triggered after the initial A0-A3 screen and before G3 closes when any
+of the following is true:
 
-- [`research/ijcnn2025-predecessor-gap.md`](research/ijcnn2025-predecessor-gap.md)
-  records the local-PDF audit, the non-overlapping claim boundary, and the
-  minimum evidence required for this submission.
-- [`research/b0-cache-b1-strategy-review.md`](research/b0-cache-b1-strategy-review.md)
-  records the performance-pipeline review, A0 contamination risk, and the
-  exact B1 execution gate.
+1. A2 or A3 shows a hierarchy-related accuracy, ET, boundary, or robustness
+   signal and hierarchy remains in the intended paper claim.
+2. Fallback C is considered for A2/A3 or attributes its result to hierarchy.
+3. A3 is the proposed final candidate and the paper argues that the soft
+   hierarchy penalty is sufficient or preferable to existing mechanisms.
+
+Do not run A4 when A1 is selected, hierarchy contributes no defensible signal,
+and all hierarchy claims are removed. This keeps the comparison hypothesis-
+driven rather than adding another method after results are seen.
+
+Before implementation, audit the primary HSSN/Tree-Min paper and official code
+when available, and persist the exact label tree, probability transformation,
+training loss, inference rule, and citation in
+`research/hierarchy-treemin-comparator-audit.md`. A summary-level recreation or
+an ad hoc min/max operation must not be labelled Tree-Min.
+
+Run exactly one matched A4 configuration. Use
+`a4_treemin_pjt0_dev_seed11171` when comparing with A2 and
+`a4_treemin_pjt1_dev_seed11171` when comparing with A3. It uses the same
+Adapter, base segmentation loss, PJT state and samples, negative-slice policy,
+seed, 200/43 cases, training budget, immutable checkpoints, frozen YOLO files,
+and raw patient-level selection endpoint as the hierarchy-bearing candidate.
+The only intended difference is:
+
+```text
+A2/A3: L_total = L_seg + lambda_hier * mean(
+        relu(p_et - p_tc) + relu(p_tc - p_wt)
+    )
+A4: canonical Tree-Min probability/loss transformation from the audited source
+```
+
+Unit tests must verify the audited label-tree semantics, probability ordering,
+gradient flow, and equivalence of all non-hierarchy inputs between the matched
+A2/A3 candidate and A4.
+Report raw macro-Dice, ET/TC/WT Dice, HD95, hierarchy violations, `pAUCdeg`,
+worst-quartile Dice, severe failures, trainable parameters, selected
+epoch/updates, wall-clock time, and peak memory.
+
+Freeze a matched-candidate-versus-A4 non-inferiority margin at G2 from A0
+variability. Apply these outcome rules without post-hoc reinterpretation:
+
+- If the paired confidence interval supports A2/A3 non-inferiority and
+  class-level guardrails pass, claim only that the architecture-preserving penalty is
+  sufficient under this automatic-prompt protocol, not that it universally
+  replaces structured hierarchy methods.
+- If A4 materially outperforms the matched A2/A3 candidate, drop the
+  soft-penalty sufficiency claim.
+  Either include A4 in the formal full-protocol comparison when hierarchy
+  remains central, or select A1 and reframe the contribution around PJT and
+  prompt robustness.
+- If the interval is inconclusive, report the comparison as inconclusive; a
+  similar point estimate is not evidence of equivalence or mechanism
+  independence.
+
+A4 remains a comparator rather than an A1-A3 proposed candidate. A dev-only A4
+may appear in the ablation table when the matched A2/A3 candidate passes the
+frozen rule. If A4 is materially stronger and hierarchy remains in the final
+claim, A4 must also be run under the formal protocol; it cannot be omitted
+because it weakens the preferred narrative.
+
+### Postprocessing Decomposition (P0)
+
+For A0 and the final candidate, report raw output, hierarchy projection only,
+morphology/component filtering only, and the full existing postprocessing
+chain. The raw table remains the paper headline.
+
+### Comparator Matrix
+
+| Comparator | Priority | Required fairness contract |
+| --- | --- | --- |
+| Conventional 2D U-Net | P0 | Same cases, modalities, labels, validation-only selection, native-grid evaluator, and raw reporting |
+| Canonical HSSN/Tree-Min A4 | P0 when triggered | Match the selected A2/A3 PJT/input/training/evaluation contract; only the audited hierarchy mechanism changes |
+| nnU-Net v2 | P1 | Canonical self-configuration, same partitions, no test-derived selection, same exported evaluator |
+| Frozen SAM-Med2D | P0 diagnostic | Same automatic prompts and evaluator |
+| LoRA | P2 | Same protocol; supplementary only |
+
+The executable baseline protocol is owned by
+`../07-13-run-strong-medical-segmentation-baselines/prd.md`. If the final candidate remains
+substantially behind nnU-Net, position the result as parameter-efficient
+automatic-prompt robustness, not state-of-the-art tumor segmentation.
+
+### Naming Contract
+
+`B0-B5` are workflow stages, `A0-A4` are SAM training/comparator variants, and Fallback
+A-D below are evidence/claim routes rather than additional run IDs. B1 remains
+the reproducible A0/checkpoint stage, B2 remains the frozen-YOLO prompt-gap
+stage, and B3 remains the one-seed A0-A3 method screen plus conditional A4. YOLO keeps its `Y0-Y4`
+child-task stages and `y0_yolo11m_paper_v1_seed11171` run identity. The first
+development A0-A3 screen also uses seed 11171.
+This parent PRD owns candidate promotion, fallback, and paper-claim gates; child
+PRDs own implementation details. Any older child wording that promotes only A3
+or requires a fixed 1.5-point gain is superseded by this frozen parent decision
+contract and must be synchronized before B3 execution.
+
+## Fallback and Decision Gates
+
+The numerical values below are initial development gates, not claims of
+universal clinical significance. After B1 quantifies A0 variability on the
+fixed development cases using immutable checkpoints and paired bootstrap (and,
+if needed, one predeclared repeatability run), freeze the exact margins and
+selected fallback endpoints before comparing B3 candidates and before any
+paper-test access. This one calibration may adjust the approximate values to
+match measured A0 variance; thresholds must not move after candidate results
+or test metrics are visible.
+
+### Predeclared Fallback Hierarchy
+
+| Route | Initial go condition on 200/43 development protocol | Permitted paper position |
+| --- | --- | --- |
+| Fallback A: raw accuracy | Final candidate improves raw patient-level macro-Dice by approximately 1.0 percentage point or more, with no material class regression | PJT and/or hierarchy consistency improves automatic-prompt segmentation |
+| Fallback B: prompt robustness | Raw macro-Dice is approximately within +/-0.5 point of A0, while the preselected perturbation AUC/curve, fixed A0 worst-quartile Dice, severe-failure rate, zero-Dice count, or HD95 shows a clear paired improvement | Detector-generated prompt robustness; average accuracy is preserved while severe automatic-prompt failures are reduced |
+| Fallback C: difficult subregion | ET or a predeclared difficult-case stratum improves clearly; WT and TC declines are each normally no worse than approximately 0.5 point | Difficult-subregion or hierarchical robustness, with all trade-offs reported |
+| Fallback D: auxiliary efficiency | Raw accuracy is non-inferior under a frozen margin and trainable parameters, selected epochs/updates, wall-clock, memory, or compute improves materially | Auxiliary efficiency evidence only; it cannot replace an accuracy or robustness contribution by itself |
+
+Any Fallback A-C route triggers A4 when the selected candidate or intended
+claim includes the soft hierarchy penalty. An A1-only accuracy, robustness, or
+ET claim does not require a hierarchy comparator.
+
+"Clear improvement" means a consistent paired direction plus a predeclared
+effect threshold or paired bootstrap interval that supports improvement; it
+does not mean selecting whichever metric happens to improve. A lower hierarchy
+violation ratio alone is never a go signal because hierarchy consistency
+directly optimizes that measure. A postprocessed-only gain is also never a go
+signal for the training method.
+
+If raw Dice, prompt robustness, worst-case/severe-failure outcomes, boundary
+quality, difficult-subregion performance, and efficiency all fail their frozen
+gates, stop method expansion. Do not enter full-data multi-seed or locked-test
+experiments for the candidate.
+
+| Gate | Deadline | Advance condition | Failure action |
+| --- | --- | --- | --- |
+| G0 Protocol | Day 7 | Split, shared normalization, evaluator, seed control, and artifact contract pass | Stop all performance claims until corrected |
+| G1 Prompt provider | Day 14 | Frozen YOLO is replayable and beats full-image prompts under A0 | Diagnose detector/data coordinates once; otherwise use the error-source analysis route without an end-to-end detector claim |
+| G2 Gate calibration | Before B3 comparison | Exact A-D margins, robustness endpoint, perturbation grid, worst quartile, severe-failure rule, checkpoint candidates, bootstrap plan, A4 trigger rule, and matched-candidate-vs-A4 non-inferiority margin are frozen from A0 variability | Keep B3 and test blocked |
+| G3 Candidate | Day 28 | The simplest strongest A1/A2/A3 candidate passes at least one frozen A-C route; conditional A4 is complete when triggered; D may accompany but not replace A-C | Do not access test; allow one diagnosis/revision cycle, then apply the analysis-only exit gate or stop |
+| G4 Baseline/freeze | Day 38 | U-Net is fairly trained; either the final candidate/fallback claim or the analysis-only A0 protocol is selected; checkpoints, thresholds, cases, seeds, and analysis are frozen | Cut P1/P2 and use buffer time |
+| G5 Test unlock | Day 39 | Signed freeze record exists and no required P0 experiment is unresolved | Keep test locked |
+| G6 Evidence complete | Day 53 | Final statistics, tables, and failure cases are reproducible | Use Days 54-60 only for missing P0 evidence and writing |
+
+No postprocessing, detector retuning, qualitative-case selection, or additional
+method component may be used to rescue a failed candidate result after test
+access.
+
+### Prompt-Robustness Analysis Protocol
+
+This analysis route is selected when raw-accuracy Fallback A is not met but the
+frozen Fallback B or C evidence is credible, or when no candidate passes and
+the paper is explicitly reframed as an error-source analysis. It is not
+permission to keep searching for a positive method result.
+
+#### Analysis Working Thesis
+
+Under a frozen SAM checkpoint and patient-level 3D protocol, automatic-prompt
+degradation can be attributed to measurable localization, missed-slice, and
+hierarchy errors, and only part of that degradation is recoverable by training
+or postprocessing.
+
+The final causal wording must follow the observed evidence. Do not predeclare
+which error source dominates.
+
+#### Analysis P0 Matrix
+
+1. Evaluate full-image, oracle, frozen-YOLO, and controlled-jitter prompts at
+   error quantiles derived from validation detector errors.
+2. Relate per-case raw Dice loss to translation, scale, coverage, false-positive
+   prompts, consecutive missed slices, tumor size, and tumor z-span.
+3. Stratify effects by ET/TC/WT and predeclared case-size groups.
+4. Decompose hierarchy projection, morphology/component filtering, and the
+   full postprocessing chain independently.
+5. Report A1/A2/A3 and triggered A4 as negative, mixed, or robustness-specific interventions;
+   claim superiority only for the candidate and frozen endpoint that passed.
+6. Freeze the analysis variables, strata, figures, and statistical tests on
+   validation before one locked-test confirmation.
+
+This route requires no new backbone, detector sweep, or test-derived threshold.
+
+#### If All Method Fallbacks Fail
+
+After the one permitted diagnosis/revision cycle, failure of Fallback A-C is a
+method no-go; Fallback D alone does not revive the method claim. Do not run a
+full-data candidate, multiple candidate seeds, or a candidate test evaluation.
+
+An analysis-only paper track may continue only when the frozen A0 evidence
+still establishes a stable oracle-to-YOLO gap or a reproducible predeclared
+perturbation response with paired uncertainty. Its paper structure is fixed as:
+
+1. Motivation: the automatic-prompt domain gap left unresolved by the IJCNN
+   predecessor.
+2. Protocol: patient-level split, frozen YOLO11m prompts, raw 3D evaluator, and
+   checkpoint/test-lock discipline.
+3. Measurement: oracle, controlled perturbation, YOLO top-1, and optional
+   full-image prompt decomposition with the fixed `pAUCdeg` contract.
+4. Error attribution: localization, scale, missing/low-confidence prompts,
+   difficult regions, severe failures, HD95, and hierarchy violations.
+5. Negative intervention evidence: A1/A2/A3 and triggered A4 development
+   results, and why PJT or hierarchy supervision did not yield a defensible
+   superiority claim.
+6. Postprocessing limits, failure cases, limitations, and implications for
+   detector-generated medical prompts.
+
+This track may perform one single-seed, full-protocol A0-only locked-test
+confirmation after its analysis variables, strata, figures, and tests are
+frozen; it must not select or rescue a candidate on test. If the oracle-to-YOLO
+gap and perturbation/error-attribution signals are also unstable or unsupported
+by paired uncertainty, terminate the ICASSP submission track and archive the
+result as an internal negative study.
 
 ## Acceptance Criteria
 
-- No patient overlap across train, val and test; manifests are committed.
-- Train/inference normalization behavior is shared and unit-tested.
-- The new training path has deterministic, configurable jitter and hierarchy
-  coefficients, and preserves the old baseline through explicit flags.
-- A3 shows at least a 1.5-point raw mean-Dice improvement over A0 on the fixed
-  development validation set, with no ET Dice decrease above 1 point; otherwise
-  stop method expansion and revise the claim before test.
-- The final test result has two-seed minimum metrics, paired significance
-  tests, the required U-Net comparison, prompt and postprocess ablations, and
-  at least three representative failure cases. Include nnU-Net and a third seed
-  when the central result is already complete and the schedule allows.
+- [ ] The paper split is immutable, disjoint, hashed, and test-locked.
+- [ ] Shared normalization and native-grid evaluator behavior are regression
+      tested before baseline claims.
+- [ ] Frozen automatic prompts are replayed identically across methods/seeds.
+- [ ] A0/A1/A2/A3 development results use the same selection and evaluation
+      contract.
+- [ ] When hierarchy remains claim-bearing, the A4 trigger is applied before
+      G3; its implementation is backed by a primary-source audit and differs
+      from A3 only in the hierarchy mechanism.
+- [ ] Matched A2/A3-versus-A4 conclusions follow the frozen non-inferiority
+      margin and paired uncertainty. A materially stronger A4 is included
+      formally or the soft-penalty hierarchy claim is dropped.
+- [ ] Raw patient-level 3D macro-Dice is the immutable primary endpoint;
+      ET/TC/WT Dice are reported separately and postprocessed Dice remains
+      secondary.
+- [ ] Formal checkpoints are selected on development raw patient-level 3D
+      evaluation from early stopping or a finite immutable candidate set, not
+      from pooled slice Dice, fixed epoch 300, or the last checkpoint.
+- [ ] Exact Fallback A-D margins, robustness endpoint, perturbation grid,
+      difficult-case strata, severe-failure rule, and bootstrap plan are frozen
+      from A0 development variability before candidate comparison and test.
+- [ ] The robustness endpoint uses the fixed per-case `pAUCdeg` definition,
+      complete 187-case validation audit, case-balanced coarse quantiles, and a
+      versioned severity-grid artifact rather than confidence-threshold AUC.
+- [ ] The simplest strongest candidate among A1/A2/A3 is selected; only A0 and
+      that candidate enter full-data multi-seed and locked-test experiments.
+- [ ] A training-method claim is rejected when improvement exists only after
+      postprocessing or only in directly optimized hierarchy violations.
+- [ ] A no-go decision is recorded before full multi-seed work when accuracy,
+      robustness, bad-case, boundary, difficult-subregion, and efficiency gates
+      all fail.
+- [ ] When all method fallbacks fail, the record chooses either the fixed
+      analysis-only paper structure with at most one single-seed full-protocol
+      A0-only locked-test confirmation or termination of the ICASSP track; it
+      does not run a final candidate experiment.
+- [ ] The conventional 2D U-Net receives its predefined fair training protocol.
+- [ ] Final evidence includes at least two A0 and final-candidate seeds, paired
+      statistics, paired bootstrap confidence intervals, prompt decomposition,
+      raw/postprocess decomposition, and at least three predeclared
+      representative failure cases.
+- [ ] The historical 20/4 experiments and 167-case validation results are not
+      used as formal paper-test evidence or main-table results.
+- [ ] The test set is accessed only after a versioned fallback/claim freeze
+      record exists.
+- [ ] P1 and P2 work does not delay P0 evidence or the writing buffer.
 
-## 60-Day Milestones
+## 60-Day Schedule
 
 | Days | Deliverable |
 | --- | --- |
-| 1-7 | Freeze protocol, normalize preprocessing, seed control, unified 3D evaluator, reproduce A0 |
-| 8-14 | Prompt diagnostic table and raw/postprocess decomposition |
-| 15-28 | Implement PJT and hierarchy loss; select A0-A3 on validation |
-| 29-38 | Run conventional U-Net; add nnU-Net only if the core result is frozen |
-| 39-50 | Freeze configuration; run two seeds and the untouched test set; add a third seed if feasible |
-| 51-60 | Statistics, figures, failure analysis, paper and reproducibility package |
+| 1-7 | Freeze data/evaluator/artifact protocol and reproduce runtime health gates |
+| 8-14 | Reproduce A0 and complete prompt-gap decomposition |
+| 15-27 | Implement and run one-seed A0/A1/A2/A3 development ablation; run A4 before G3 when triggered |
+| 28 | Apply the frozen fallback gates; select A1/A2/A3 candidate, analysis route, or no-go |
+| 29-38 | Run conventional U-Net, complete required decompositions, freeze final protocol |
+| 39-48 | Run required full seeds and the single locked-test confirmation |
+| 49-53 | Complete paired statistics, tables, figures, and failure analysis |
+| 54-60 | Slack for missing P0 evidence, paper writing, and reproducibility packaging |
 
-## Risks and Decision Gates
+## Document Ownership
 
-- Do not access test metrics before the A0-A3 design and hyperparameters are
-  frozen in the task record.
-- If prompt decomposition shows that YOLO localization dominates the error,
-  report it and prioritize PJT; do not conceal it with postprocessing.
-- If A3 has no validation signal, stop extending the method and reframe the
-  paper around the measured prompt-robustness analysis.
-- If A3 fails the 1.5-point / ET guardrail on the fixed development validation
-  set, do not access test labels or add new method components. Diagnose the
-  prompt gap and either revise the method once or stop the paper track.
-- Do not use the prior `fixed20` or 167-case validation result as a final
-  paper headline number.
+- [`info.md`](info.md) owns shared technical design, AutoDL execution gates,
+  run identity, artifact layout, and configuration-freeze mechanics.
+- [`../07-13-freeze-data-protocol-and-evaluator/prd.md`](../07-13-freeze-data-protocol-and-evaluator/prd.md)
+  owns split, preprocessing, and evaluator implementation.
+- [`../07-13-diagnose-prompt-and-postprocess-gap/prd.md`](../07-13-diagnose-prompt-and-postprocess-gap/prd.md)
+  owns YOLO training/selection and prompt-gap execution.
+- [`../07-13-implement-hierarchical-prompt-robust-training/prd.md`](../07-13-implement-hierarchical-prompt-robust-training/prd.md)
+  owns PJT, hierarchy loss, A0-A3 implementation, and the conditional A4 comparator.
+- [`../07-13-run-strong-medical-segmentation-baselines/prd.md`](../07-13-run-strong-medical-segmentation-baselines/prd.md)
+  owns U-Net and nnU-Net execution.
+- [`../07-13-finalize-icassp-statistics-and-paper-assets/prd.md`](../07-13-finalize-icassp-statistics-and-paper-assets/prd.md)
+  owns locked-test statistics and paper assets.
+
+## Research References
+
+- [`research/literature-survey-sam-medical-2024-2026.md`](research/literature-survey-sam-medical-2024-2026.md)
+  provides the broader related-work context.
+- [`research/ijcnn2025-predecessor-gap.md`](research/ijcnn2025-predecessor-gap.md)
+  records the immediate-predecessor audit and non-overlapping claim boundary.
+- [`research/autodl-environment-validation-2026-07-14.md`](research/autodl-environment-validation-2026-07-14.md)
+  records the verified training environment and storage constraints.
+- [`research/archive/b0-cache-b1-strategy-review-j3s2-2026-07-13.md`](research/archive/b0-cache-b1-strategy-review-j3s2-2026-07-13.md)
+  preserves superseded group-server measurements for historical context only.

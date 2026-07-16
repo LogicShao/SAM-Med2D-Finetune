@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Paper Positioning Thinking Guide](./paper-positioning-thinking-guide.md) | Check research scope, baseline causality, claims and failure paths | Before drafting or revising research manuscripts |
 
 ---
 
@@ -46,6 +47,15 @@ These guides help you **ask the right questions before coding**.
 - [ ] **You're creating a new utility/helper function** ← Search first!
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
+
+### When to Think About Paper Positioning
+
+- [ ] You are drafting an abstract, introduction or reviewer response
+- [ ] A baseline comparison changes several factors at once
+- [ ] A result may force a method, analysis-only or no-go narrative
+- [ ] A claimed advantage was not directly measured
+
+→ Read [Paper Positioning Thinking Guide](./paper-positioning-thinking-guide.md)
 
 ---
 

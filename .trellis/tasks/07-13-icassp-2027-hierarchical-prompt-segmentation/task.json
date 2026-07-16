@@ -42,7 +42,7 @@
   "meta": {
     "conference": "ICASSP 2027",
     "deadline_window_days": 60,
-    "frozen_split": "data_brats_raw/split_manifest.json",
+    "frozen_split": "data_brats_paper_v1/split_manifest.json",
     "baseline_checkpoint": "workdir_multi_task/models/finetune_adapter/best_model.pth",
     "auto_commit": true
   }
