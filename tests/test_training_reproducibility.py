@@ -8,7 +8,12 @@ from unittest import mock
 import numpy as np
 import torch
 
-from sam_med2d_finetune.training.train_multitask import save_epoch_snapshot, seed_everything, seed_worker
+from sam_med2d_finetune.training.train_multitask import (
+    parse_args,
+    save_epoch_snapshot,
+    seed_everything,
+    seed_worker,
+)
 from sam_med2d_finetune.utils.cli import str_to_bool
 
 
@@ -21,6 +26,18 @@ class TrainingReproducibilityTest(unittest.TestCase):
     def test_boolean_cli_parser_handles_false_explicitly(self):
         self.assertFalse(str_to_bool("false"))
         self.assertTrue(str_to_bool("true"))
+
+    def test_cudnn_benchmark_rejects_deterministic_mode(self):
+        argv = [
+            "train_multitask.py",
+            "--finetune_method", "adapter",
+            "--train_data_path", "train",
+            "--val_data_path", "val",
+            "--deterministic", "true",
+            "--cudnn_benchmark", "true",
+        ]
+        with mock.patch("sys.argv", argv), self.assertRaises(SystemExit):
+            parse_args()
 
     def test_global_seed_repeats_python_numpy_and_torch_sequences(self):
         seed_everything(123, deterministic=True)

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from sam_med2d_finetune.brats.cache import (
@@ -21,6 +22,16 @@ from sam_med2d_finetune.training.profiler import parse_cuda_device_index
 
 
 class CachedBraTSDatasetTest(unittest.TestCase):
+
+    def test_train_affine_uses_constant_image_and_mask_fill(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = BraTSDataset(temp_dir, mode="train")
+
+        affine = dataset.transform.transforms[1]
+        self.assertEqual(affine.border_mode, cv2.BORDER_CONSTANT)
+        self.assertEqual(affine.fill, 0.0)
+        self.assertEqual(affine.fill_mask, 0.0)
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)

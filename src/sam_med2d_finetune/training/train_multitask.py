@@ -56,6 +56,12 @@ def parse_args():
     parser.add_argument("--use_amp", type=str_to_bool, default=True, help="启用自动混合精度训练 (AMP)")
     parser.add_argument("--disable_cudnn", type=str_to_bool, default=False,
                         help="禁用 cuDNN，用于不稳定 CUDA 环境")
+    parser.add_argument(
+        "--cudnn_benchmark",
+        type=str_to_bool,
+        default=False,
+        help="为固定输入形状启用 cuDNN autotune；与 deterministic/disable_cudnn 互斥",
+    )
     parser.add_argument("--num_workers", type=int, default=4, help="DataLoader 工作进程数")
     parser.add_argument(
         "--non_blocking_transfer",
@@ -93,6 +99,24 @@ def parse_args():
                         help="阴性 slice 的 prompt box 策略")
     parser.add_argument("--dataset_seed", type=int, default=None,
                         help="负 slice 采样与随机阴性框种子；默认继承 --seed")
+    # --- PJT (Prompt Jitter Training) 参数 ---
+    parser.add_argument("--pjt", type=str_to_bool, default=False,
+                        help="启用 Prompt Jitter Training (PJT)")
+    parser.add_argument("--pjt_translate_max", type=float, default=0.10,
+                        help="PJT 中心点平移最大值（box 尺寸比例）")
+    parser.add_argument("--pjt_scale_min", type=float, default=0.85,
+                        help="PJT 尺度缩放最小值")
+    parser.add_argument("--pjt_scale_max", type=float, default=1.15,
+                        help="PJT 尺度缩放最大值")
+    parser.add_argument("--pjt_miss_prob", type=float, default=0.0,
+                        help="PJT 模拟丢失 box 的概率")
+    parser.add_argument("--pjt_seed", type=int, default=None,
+                        help="PJT 随机种子；默认继承 --dataset_seed")
+    # --- Hierarchy Supervision 参数 ---
+    parser.add_argument("--hierarchy_loss", type=str_to_bool, default=False,
+                        help="启用 voxelwise hierarchy supervision")
+    parser.add_argument("--lambda_hier", type=float, default=1.0,
+                        help="Hierarchy loss 权重")
     parser.add_argument("--profile_performance", type=str_to_bool, default=False,
                         help="记录 DataLoader 等待和 CUDA event 计算时间")
     parser.add_argument("--profile_stages", type=str_to_bool, default=False,
@@ -135,6 +159,10 @@ def parse_args():
         parser.error("--prefetch_factor requires --num_workers greater than zero.")
     if args.negative_to_positive_ratio < 0.0:
         parser.error("--negative_to_positive_ratio must be zero or greater.")
+    if args.deterministic and args.cudnn_benchmark:
+        parser.error("--cudnn_benchmark cannot be enabled with --deterministic.")
+    if args.disable_cudnn and args.cudnn_benchmark:
+        parser.error("--cudnn_benchmark requires --disable_cudnn false.")
     if args.profile_sample_interval <= 0.0:
         parser.error("--profile_sample_interval must be greater than zero.")
     if any(epoch <= 0 for epoch in args.save_epochs):
@@ -142,6 +170,8 @@ def parse_args():
     args.save_epochs = sorted(set(args.save_epochs))
     if args.dataset_seed is None:
         args.dataset_seed = args.seed
+    if args.pjt_seed is None:
+        args.pjt_seed = args.dataset_seed
     args.run_name = f"{args.run_name}_{args.finetune_method}"
     return args
 
@@ -295,6 +325,13 @@ def train_one_epoch(model, optimizer, train_loader, criterion, args, epoch, scal
                 all_class_masks.append(upscaled_masks)
 
             final_loss = accumulated_loss / args.num_classes
+            # Hierarchy supervision loss
+            if args.hierarchy_loss:
+                p_et = torch.sigmoid(all_class_masks[0])
+                p_tc = torch.sigmoid(all_class_masks[1])
+                p_wt = torch.sigmoid(all_class_masks[2])
+                hier_loss = torch.mean(torch.relu(p_et - p_tc) + torch.relu(p_tc - p_wt))
+                final_loss = final_loss + args.lambda_hier * hier_loss
             if profile_stages:
                 prompt_decoder_end.record()
 
@@ -385,6 +422,7 @@ def validate_one_epoch(model, val_loader, criterion, args):
             with autocast(device_type=args.device.split(':')[0], enabled=args.use_amp):
                 image_embeddings = model.image_encoder(images)
                 accumulated_loss = 0
+                all_class_masks = []
                 for c in range(args.num_classes):
                     boxes_c = batched_input["boxes"][:, c, :]
                     labels_c = labels[:, c:c + 1, :, :]
@@ -404,13 +442,21 @@ def validate_one_epoch(model, val_loader, criterion, args):
 
                     loss = criterion(upscaled_masks, labels_c, iou_predictions)
                     accumulated_loss += loss
+                    all_class_masks.append(upscaled_masks)
 
                     binary_masks = (torch.sigmoid(upscaled_masks) > 0.5).float()
                     dice_c, iou_c = SegMetrics(binary_masks, labels_c, ['dice', 'iou'])
                     total_dice[c] += dice_c
                     total_iou[c] += iou_c
 
-                total_loss += (accumulated_loss / args.num_classes).item()
+                val_loss = accumulated_loss / args.num_classes
+                if args.hierarchy_loss:
+                    p_et = torch.sigmoid(all_class_masks[0])
+                    p_tc = torch.sigmoid(all_class_masks[1])
+                    p_wt = torch.sigmoid(all_class_masks[2])
+                    hier_loss = torch.mean(torch.relu(p_et - p_tc) + torch.relu(p_tc - p_wt))
+                    val_loss = val_loss + args.lambda_hier * hier_loss
+                total_loss += val_loss.item()
 
     avg_loss = total_loss / len(val_loader)
     avg_dice = total_dice / len(val_loader)
@@ -487,13 +533,19 @@ def main(args):
         os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
     )
 
-    if args.disable_cudnn:
-        torch.backends.cudnn.enabled = False
+    torch.backends.cudnn.enabled = not args.disable_cudnn
+    torch.backends.cudnn.benchmark = args.cudnn_benchmark
+    torch.backends.cudnn.deterministic = args.deterministic
     is_amp_enabled = args.use_amp and ('cuda' in args.device)
     args.use_amp = is_amp_enabled
     scaler = GradScaler(enabled=is_amp_enabled)
     logger.info(f"Automatic Mixed Precision (AMP) enabled: {is_amp_enabled}")
-    logger.info(f"cuDNN enabled: {torch.backends.cudnn.enabled}")
+    logger.info(
+        "cuDNN -> enabled: %s | benchmark: %s | deterministic: %s",
+        torch.backends.cudnn.enabled,
+        torch.backends.cudnn.benchmark,
+        torch.backends.cudnn.deterministic,
+    )
 
     model = build_multitask_base_model(
         model_type=args.model_type,
@@ -532,7 +584,13 @@ def main(args):
                                  num_classes=args.num_classes, mode='train', subset_size=args.train_subset_size,
                                  cache_root=args.cache_root, cache_max_cases=args.cache_max_cases,
                                  negative_to_positive_ratio=args.negative_to_positive_ratio,
-                                 negative_prompt_box=args.negative_prompt_box, sample_seed=args.dataset_seed)
+                                 negative_prompt_box=args.negative_prompt_box, sample_seed=args.dataset_seed,
+                                 pjt_enabled=args.pjt,
+                                 pjt_translate_max=args.pjt_translate_max,
+                                 pjt_scale_min=args.pjt_scale_min,
+                                 pjt_scale_max=args.pjt_scale_max,
+                                 pjt_miss_prob=args.pjt_miss_prob,
+                                 pjt_seed=args.pjt_seed)
     val_dataset = BraTSDataset(data_path=args.val_data_path, image_size=args.image_size, num_classes=args.num_classes,
                                mode='val', subset_size=args.val_subset_size, cache_root=args.cache_root,
                                cache_max_cases=args.cache_max_cases, negative_to_positive_ratio=0.0,

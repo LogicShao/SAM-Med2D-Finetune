@@ -39,6 +39,12 @@ class BraTSDataset(Dataset):
         negative_to_positive_ratio=0.0,
         negative_prompt_box='zero',
         sample_seed=42,
+        pjt_enabled=False,
+        pjt_translate_max=0.10,
+        pjt_scale_min=0.85,
+        pjt_scale_max=1.15,
+        pjt_miss_prob=0.0,
+        pjt_seed=None,
     ):
         self.data_path = data_path
         self.image_size = image_size
@@ -49,6 +55,12 @@ class BraTSDataset(Dataset):
         self.negative_to_positive_ratio = max(float(negative_to_positive_ratio), 0.0)
         self.negative_prompt_box = str(negative_prompt_box)
         self.sample_seed = int(sample_seed)
+        self.pjt_enabled = bool(pjt_enabled)
+        self.pjt_translate_max = max(0.0, float(pjt_translate_max))
+        self.pjt_scale_min = min(float(pjt_scale_min), float(pjt_scale_max))
+        self.pjt_scale_max = max(float(pjt_scale_min), float(pjt_scale_max))
+        self.pjt_miss_prob = max(0.0, min(1.0, float(pjt_miss_prob)))
+        self.pjt_seed = int(pjt_seed) if pjt_seed is not None else int(sample_seed)
         self._case_cache = OrderedDict()
         self._cache_metadata = {}
 
@@ -99,9 +111,9 @@ class BraTSDataset(Dataset):
                     scale=(1 - 0.1, 1 + 0.1),  # 对应 scale_limit
                     rotate=(-15, 15),  # 对应 rotate_limit
                     p=0.7,
-                    mode=cv2.BORDER_CONSTANT,
-                    cval=0,
-                    cval_mask=0,
+                    border_mode=cv2.BORDER_CONSTANT,
+                    fill=0,
+                    fill_mask=0,
                 ),
                 A.RandomBrightnessContrast(p=0.5),
                 A.ElasticTransform(p=0.5, border_mode=cv2.BORDER_CONSTANT),
@@ -158,6 +170,44 @@ class BraTSDataset(Dataset):
         y_min = int(rng.integers(0, max(height - box_height + 1, 1)))
         return torch.tensor([x_min, y_min, x_min + box_width - 1, y_min + box_height - 1], dtype=torch.float32)
 
+    def _jitter_box(self, box, sample_index, class_index, img_size):
+        """Apply PJT jitter to a positive oracle box. Deterministic per (sample, class)."""
+        rng = np.random.default_rng(self.pjt_seed + sample_index * 31 + class_index)
+        x_min, y_min, x_max, y_max = box.tolist()
+        box_w = x_max - x_min + 1
+        box_h = y_max - y_min + 1
+
+        if box_w <= 0 or box_h <= 0:
+            return box  # empty box, no jitter
+
+        # Miss simulation
+        if self.pjt_miss_prob > 0 and rng.random() < self.pjt_miss_prob:
+            return torch.tensor([0, 0, 0, 0], dtype=torch.float32)
+
+        # Translation jitter
+        translate_x = rng.uniform(-self.pjt_translate_max, self.pjt_translate_max) * box_w
+        translate_y = rng.uniform(-self.pjt_translate_max, self.pjt_translate_max) * box_h
+
+        # Scale jitter
+        scale = rng.uniform(self.pjt_scale_min, self.pjt_scale_max)
+        cx = (x_min + x_max) / 2.0 + translate_x
+        cy = (y_min + y_max) / 2.0 + translate_y
+        half_w = box_w * scale / 2.0
+        half_h = box_h * scale / 2.0
+
+        x_min_j = int(round(cx - half_w))
+        y_min_j = int(round(cy - half_h))
+        x_max_j = int(round(cx + half_w))
+        y_max_j = int(round(cy + half_h))
+
+        # Clip to image bounds with minimum extent
+        x_min_j = max(0, min(x_min_j, img_size - 2))
+        y_min_j = max(0, min(y_min_j, img_size - 2))
+        x_max_j = max(x_min_j + 1, min(x_max_j, img_size - 1))
+        y_max_j = max(y_min_j + 1, min(y_max_j, img_size - 1))
+
+        return torch.tensor([x_min_j, y_min_j, x_max_j, y_max_j], dtype=torch.float32)
+
     def __getitem__(self, idx):
         patient_id, slice_idx = self.slice_list[idx]
         patient_folder = os.path.join(self.data_path, patient_id)
@@ -204,11 +254,14 @@ class BraTSDataset(Dataset):
         boxes = []
         for i in range(self.num_classes):
             box = get_main_bounding_box(torch.from_numpy(label[i]))
+            box_is_empty = (box[2] - box[0] <= 0) or (box[3] - box[1] <= 0)
             if (
                 self.negative_prompt_box == 'random'
                 and not np.any(label)
             ):
                 box = self._random_negative_box(self.image_size, self.image_size, idx, i)
+            elif self.pjt_enabled and self.mode == 'train' and not box_is_empty:
+                box = self._jitter_box(box, idx, i, self.image_size)
             boxes.append(box)
         boxes_tensor = torch.stack(boxes, dim=0)
 
