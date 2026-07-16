@@ -1,0 +1,32 @@
+{
+  "fixture": true,
+  "run_id": "validation_success_fixture_seed11171",
+  "stage": "validation",
+  "method": "adapter",
+  "purpose": "Exercise the manifest-complete success reporting path",
+  "status": "succeeded",
+  "code_revision": "synthetic-fixture",
+  "dirty_worktree": false,
+  "data_view": "fixture20",
+  "case_counts": {
+    "validation": 20
+  },
+  "split_manifest": "synthetic-fixture",
+  "split_sha256": "fixture-split-sha256",
+  "seeds": {
+    "training": 11171,
+    "dataset": 11171
+  },
+  "resolved_command": "synthetic validation fixture; do not execute",
+  "prompt_condition": "frozen-yolo",
+  "postprocess_condition": "disabled",
+  "checkpoints": {
+    "base_sha256": "fixture-base-sha256",
+    "selected_sha256": "fixture-selected-sha256"
+  },
+  "environment": "synthetic-fixture",
+  "wall_clock_seconds": 10,
+  "artifacts": {
+    "summary": "metrics/summary.json"
+  }
+}

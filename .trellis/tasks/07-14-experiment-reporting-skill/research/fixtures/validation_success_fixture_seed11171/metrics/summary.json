@@ -1,0 +1,22 @@
+{
+  "raw": {
+    "macro_dice": 0.51,
+    "dice": {
+      "ET": 0.41,
+      "TC": 0.52,
+      "WT": 0.60
+    },
+    "hd95_mm": 12.0
+  },
+  "baseline": {
+    "run_id": "validation_baseline_fixture_seed11171",
+    "macro_dice": 0.50,
+    "dice": {
+      "ET": 0.40,
+      "TC": 0.51,
+      "WT": 0.59
+    },
+    "hd95_mm": 12.5
+  },
+  "paired_uncertainty": "fixture 95% CI [+0.002, +0.018]"
+}
