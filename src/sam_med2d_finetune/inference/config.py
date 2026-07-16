@@ -84,7 +84,19 @@ def build_yolo_prompt_config(
     wt_continuity_mask_blur_kernel,
     class_prompt_variant,
     et_prompt_variant,
+    yolo_predictions=None,
 ):
+    if prompt_mode == "frozen_yolo_box":
+        if not yolo_predictions:
+            raise ValueError("prompt_mode=frozen_yolo_box requires --yolo_predictions.")
+        return {
+            "mode": "frozen_replay",
+            "predictions": str(Path(yolo_predictions).resolve()),
+            "box_strategy": "top1",
+            "box_strategy_by_class": {class_name: "top1" for class_name in BRATS_CLASS_NAMES},
+            "class_prompt_variant": str(class_prompt_variant),
+            "et_prompt_variant": str(et_prompt_variant),
+        }
     if prompt_mode != "yolo_box":
         return None
     class_strategies = normalize_class_prompt_strategies(

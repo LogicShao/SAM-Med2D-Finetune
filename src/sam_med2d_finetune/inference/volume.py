@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +117,249 @@ class UpperBoundPromptProvider:
         if gt_box is None:
             return None
         return torch.tensor([[gt_box]], dtype=torch.float32)
+
+
+class FrozenYoloBoxPromptProvider:
+    SCHEMA_VERSION = 1
+
+    def __init__(self, image_size, yolo_predictions):
+        self.image_size = int(image_size)
+        if self.image_size <= 0:
+            raise ValueError(f"image_size must be positive, got {self.image_size}.")
+        if not yolo_predictions:
+            raise ValueError("prompt_mode=frozen_yolo_box requires --yolo_predictions.")
+
+        self.prediction_path = Path(yolo_predictions).resolve()
+        if not self.prediction_path.is_file():
+            raise FileNotFoundError(f"Frozen YOLO predictions not found: {self.prediction_path}")
+
+        try:
+            payload = json.loads(self.prediction_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid frozen YOLO prediction JSON: {self.prediction_path}") from exc
+
+        self.prediction_sha256 = self._sha256_file(self.prediction_path)
+        self._metadata, self._predictions, self._case_slices = self._validate_payload(payload)
+        self._validated_case_shapes = set()
+
+    @staticmethod
+    def _sha256_file(path):
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _require_sha256(payload, field_name):
+        value = payload.get(field_name)
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"Frozen YOLO predictions require a 64-character {field_name}.")
+        if any(character not in "0123456789abcdefABCDEF" for character in value):
+            raise ValueError(f"Frozen YOLO predictions contain an invalid {field_name}.")
+        return value.lower()
+
+    @staticmethod
+    def _parse_slice_stem(stem):
+        if not isinstance(stem, str):
+            raise ValueError("Every frozen YOLO slice requires a string stem.")
+        case_id, separator, z_value = stem.rpartition("_z")
+        if not separator or not case_id or not z_value.isdigit():
+            raise ValueError(f"Invalid frozen YOLO slice stem: {stem}")
+        return case_id, int(z_value)
+
+    @staticmethod
+    def _validate_box(box, stem):
+        if not isinstance(box, dict):
+            raise ValueError(f"Frozen YOLO box for {stem} must be an object.")
+        xywh = box.get("xywh")
+        if not isinstance(xywh, list) or len(xywh) != 4:
+            raise ValueError(f"Frozen YOLO box for {stem} requires four normalized xywh values.")
+        try:
+            x_center, y_center, width, height = [float(value) for value in xywh]
+            confidence = float(box["confidence"])
+            class_id = float(box["class_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Frozen YOLO box for {stem} has malformed fields.") from exc
+
+        values = (x_center, y_center, width, height, confidence, class_id)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f"Frozen YOLO box for {stem} contains non-finite values.")
+        if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0):
+            raise ValueError(f"Frozen YOLO box center for {stem} must be normalized to [0, 1].")
+        if not (0.0 < width <= 1.0 and 0.0 < height <= 1.0):
+            raise ValueError(f"Frozen YOLO box size for {stem} must be normalized to (0, 1].")
+        if x_center - width / 2.0 < -1e-6 or x_center + width / 2.0 > 1.0 + 1e-6:
+            raise ValueError(f"Frozen YOLO box for {stem} extends beyond the normalized image width.")
+        if y_center - height / 2.0 < -1e-6 or y_center + height / 2.0 > 1.0 + 1e-6:
+            raise ValueError(f"Frozen YOLO box for {stem} extends beyond the normalized image height.")
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"Frozen YOLO confidence for {stem} must be in [0, 1].")
+        if class_id != 0.0:
+            raise ValueError(f"Frozen YOLO class_id for {stem} must be 0 for the Tumor class.")
+
+        return {
+            "xywh": [x_center, y_center, width, height],
+            "confidence": confidence,
+            "class_id": 0,
+        }
+
+    @classmethod
+    def _validate_payload(cls, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("Frozen YOLO prediction payload must be a JSON object.")
+        if payload.get("schema_version") != cls.SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported frozen YOLO schema_version: {payload.get('schema_version')}. "
+                f"Expected {cls.SCHEMA_VERSION}."
+            )
+
+        model_sha256 = cls._require_sha256(payload, "model_sha256")
+        dataset_manifest_sha256 = cls._require_sha256(payload, "dataset_manifest_sha256")
+        case_ids = payload.get("case_ids")
+        if not isinstance(case_ids, list) or not case_ids:
+            raise ValueError("Frozen YOLO predictions require a non-empty case_ids list.")
+        if any(not isinstance(case_id, str) or not case_id for case_id in case_ids):
+            raise ValueError("Frozen YOLO case_ids must contain non-empty strings.")
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("Frozen YOLO predictions contain duplicate case_ids.")
+        if payload.get("case_count") != len(case_ids):
+            raise ValueError("Frozen YOLO case_count does not match case_ids.")
+
+        slices = payload.get("slices")
+        if not isinstance(slices, list):
+            raise ValueError("Frozen YOLO predictions require a slices list.")
+        if payload.get("slice_count") != len(slices):
+            raise ValueError("Frozen YOLO slice_count does not match slices.")
+
+        case_id_set = set(case_ids)
+        predictions = {}
+        case_slices = {case_id: set() for case_id in case_ids}
+        seen_stems = set()
+        for item in slices:
+            if not isinstance(item, dict):
+                raise ValueError("Every frozen YOLO slice entry must be an object.")
+            stem = item.get("stem")
+            stem_case_id, stem_z_index = cls._parse_slice_stem(stem)
+            case_id = item.get("case_id")
+            z_index = item.get("z_index")
+            if not isinstance(z_index, int) or isinstance(z_index, bool):
+                raise ValueError(f"Frozen YOLO slice z_index must be an integer: {stem}")
+            if case_id != stem_case_id or z_index != stem_z_index:
+                raise ValueError(f"Frozen YOLO slice identity does not match stem: {stem}")
+            if case_id not in case_id_set:
+                raise ValueError(f"Frozen YOLO slice references undeclared case_id: {case_id}")
+            key = (case_id, z_index)
+            if key in predictions or stem in seen_stems:
+                raise ValueError(f"Duplicate frozen YOLO slice entry: {stem}")
+
+            boxes = item.get("boxes")
+            if not isinstance(boxes, list):
+                raise ValueError(f"Frozen YOLO slice {stem} requires a boxes list.")
+            if len(boxes) > 1:
+                raise ValueError(f"Frozen YOLO slice {stem} violates the top-1 prediction contract.")
+            predictions[key] = [cls._validate_box(box, stem) for box in boxes]
+            case_slices[case_id].add(z_index)
+            seen_stems.add(stem)
+
+        for case_id, z_indices in case_slices.items():
+            if not z_indices:
+                raise ValueError(f"Frozen YOLO case has no slice entries: {case_id}")
+            expected = set(range(max(z_indices) + 1))
+            if z_indices != expected:
+                raise ValueError(f"Frozen YOLO case has missing or non-contiguous slices: {case_id}")
+
+        metadata = {
+            "schema_version": cls.SCHEMA_VERSION,
+            "model": payload.get("model"),
+            "model_sha256": model_sha256,
+            "dataset_manifest": payload.get("dataset_manifest"),
+            "dataset_manifest_sha256": dataset_manifest_sha256,
+            "case_count": len(case_ids),
+            "slice_count": len(slices),
+            "conf": payload.get("conf"),
+            "iou": payload.get("iou"),
+            "imgsz": payload.get("imgsz"),
+            "max_det": payload.get("max_det"),
+        }
+        return metadata, predictions, case_slices
+
+    def _validate_case(self, brats_case):
+        case_id = brats_case.case_id
+        depth = int(brats_case.shape[2])
+        cache_key = (case_id, depth)
+        if cache_key in self._validated_case_shapes:
+            return
+        if case_id not in self._case_slices:
+            raise KeyError(f"Frozen YOLO predictions do not contain case_id: {case_id}")
+        expected = set(range(depth))
+        if self._case_slices[case_id] != expected:
+            raise ValueError(
+                f"Frozen YOLO slices for {case_id} do not match case depth {depth}."
+            )
+        self._validated_case_shapes.add(cache_key)
+
+    def _prediction_for(self, slice_index, brats_case):
+        self._validate_case(brats_case)
+        key = (brats_case.case_id, int(slice_index))
+        if key not in self._predictions:
+            raise KeyError(
+                f"Frozen YOLO predictions are missing slice {brats_case.case_id} z={slice_index}."
+            )
+        boxes = self._predictions[key]
+        return boxes[0] if boxes else None
+
+    def _to_sam_xyxy(self, normalized_xywh):
+        x_center, y_center, width, height = normalized_xywh
+        maximum = float(self.image_size - 1)
+        scale = float(self.image_size)
+        return [
+            float(np.clip((x_center - width / 2.0) * scale, 0.0, maximum)),
+            float(np.clip((y_center - height / 2.0) * scale, 0.0, maximum)),
+            float(np.clip((x_center + width / 2.0) * scale, 0.0, maximum)),
+            float(np.clip((y_center + height / 2.0) * scale, 0.0, maximum)),
+        ]
+
+    def should_skip_slice(self, slice_index, brats_case):
+        return self._prediction_for(slice_index, brats_case) is None
+
+    def get_prompt_info(self, class_index, slice_index, brats_case):
+        class_name = CLASS_NAMES[int(class_index)]
+        prediction = self._prediction_for(slice_index, brats_case)
+        selected_box = None if prediction is None else self._to_sam_xyxy(prediction["xywh"])
+        score = None if prediction is None else float(prediction["confidence"])
+        return {
+            "boxes": torch.tensor([[selected_box]], dtype=torch.float32) if selected_box is not None else None,
+            "primary_box_xyxy": list(selected_box) if selected_box is not None else None,
+            "primary_score": score,
+            "source": "frozen_yolo_top1" if prediction is not None else "frozen_yolo_miss",
+            "class_name": class_name,
+            "slice_index": int(slice_index),
+            "selected_box_xyxy": list(selected_box) if selected_box is not None else None,
+        }
+
+    def get_boxes(self, class_index, slice_index, brats_case):
+        return self.get_prompt_info(class_index, slice_index, brats_case)["boxes"]
+
+    def build_case_prompt_report(self, brats_case, gt_masks=None):
+        del gt_masks
+        self._validate_case(brats_case)
+        prompted_slices = sum(
+            bool(self._predictions[(brats_case.case_id, z_index)])
+            for z_index in range(int(brats_case.shape[2]))
+        )
+        return {
+            "case_id": brats_case.case_id,
+            "prompt_mode": "frozen_yolo_box",
+            "prediction_file": str(self.prediction_path),
+            "prediction_sha256": self.prediction_sha256,
+            "prediction_metadata": self._metadata,
+            "summary": {
+                "total_slices": int(brats_case.shape[2]),
+                "slices_with_prompt": prompted_slices,
+                "slices_skipped": int(brats_case.shape[2]) - prompted_slices,
+            },
+        }
 
 
 def _configure_ultralytics_env(config_dir=".ultralytics"):
@@ -810,6 +1055,7 @@ class YoloBoxPromptProvider:
 
 
 PROMPT_PROVIDERS = {
+    "frozen_yolo_box": FrozenYoloBoxPromptProvider,
     "full_image_box": FullImageBoxPromptProvider,
     "upper_bound": UpperBoundPromptProvider,
     "yolo_box": YoloBoxPromptProvider,
@@ -832,6 +1078,7 @@ def parse_args():
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
     parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
+    parser.add_argument("--yolo_predictions", default=None)
     parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--yolo_iou", type=float, default=0.60)
     parser.add_argument("--yolo_max_det", type=int, default=2)
@@ -873,6 +1120,7 @@ def build_prompt_provider(
     prompt_mode,
     image_size,
     yolo_checkpoint=None,
+    yolo_predictions=None,
     yolo_conf=0.05,
     yolo_iou=0.60,
     yolo_max_det=2,
@@ -901,6 +1149,11 @@ def build_prompt_provider(
     device="cpu",
 ):
     provider_class = PROMPT_PROVIDERS[prompt_mode]
+    if prompt_mode == "frozen_yolo_box":
+        return provider_class(
+            image_size=image_size,
+            yolo_predictions=yolo_predictions,
+        )
     if prompt_mode == "yolo_box":
         return provider_class(
             image_size=image_size,
@@ -1320,6 +1573,7 @@ def main():
         args.prompt_mode,
         args.image_size,
         yolo_checkpoint=args.yolo_checkpoint,
+        yolo_predictions=args.yolo_predictions,
         yolo_conf=args.yolo_conf,
         yolo_iou=args.yolo_iou,
         yolo_max_det=args.yolo_max_det,
@@ -1467,6 +1721,7 @@ def main():
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
             class_prompt_variant=args.class_prompt_variant,
             et_prompt_variant=args.et_prompt_variant,
+            yolo_predictions=args.yolo_predictions,
         )
         prompt_report["runtime_prompt_summary"] = inference_report["prompt_summary"]
         prompt_report["runtime_prompt_events"] = inference_report["prompt_records"]
@@ -1519,6 +1774,7 @@ def main():
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
             class_prompt_variant=args.class_prompt_variant,
             et_prompt_variant=args.et_prompt_variant,
+            yolo_predictions=args.yolo_predictions,
         ),
     )
     save_case_meta(brats_case, output_dir, meta)

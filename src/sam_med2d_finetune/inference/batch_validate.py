@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument("--use_amp", type=str_to_bool, default=True)
     parser.add_argument("--disable_cudnn", type=str_to_bool, default=False)
     parser.add_argument("--yolo_checkpoint", default=DEFAULT_YOLO_CHECKPOINT)
+    parser.add_argument("--yolo_predictions", default=None)
     parser.add_argument("--yolo_conf", type=float, default=0.05)
     parser.add_argument("--yolo_iou", type=float, default=0.60)
     parser.add_argument("--yolo_max_det", type=int, default=2)
@@ -339,6 +340,16 @@ def write_summary_markdown(output_path, summary):
             f"- WT continuity mask blur kernel: `{wt_continuity.get('mask_blur_kernel')}`",
             "",
         ])
+    elif config.get("prompt_mode") == "frozen_yolo_box":
+        lines.extend([
+            "### Frozen YOLO Prompt Config",
+            "",
+            f"- Prediction file: `{config['yolo_predictions']}`",
+            "- Box strategy: `top1` shared by ET/TC/WT",
+            f"- Class prompt variant: `{config.get('class_prompt_variant')}`",
+            f"- ET prompt variant: `{config.get('et_prompt_variant')}`",
+            "",
+        ])
 
     if cases:
         lines.extend([
@@ -595,6 +606,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
             class_prompt_variant=args.class_prompt_variant,
             et_prompt_variant=args.et_prompt_variant,
+            yolo_predictions=args.yolo_predictions,
         ),
     )
     save_case_meta(brats_case, output_dir, initial_meta)
@@ -646,6 +658,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
             class_prompt_variant=args.class_prompt_variant,
             et_prompt_variant=args.et_prompt_variant,
+            yolo_predictions=args.yolo_predictions,
         )
         prompt_report["runtime_prompt_summary"] = inference_report["prompt_summary"]
         prompt_report["runtime_prompt_events"] = inference_report["prompt_records"]
@@ -698,6 +711,7 @@ def run_single_case(case_dir, output_root, model, prompt_provider, device, args)
             wt_continuity_mask_blur_kernel=args.wt_continuity_mask_blur_kernel,
             class_prompt_variant=args.class_prompt_variant,
             et_prompt_variant=args.et_prompt_variant,
+            yolo_predictions=args.yolo_predictions,
         ),
     )
     save_case_meta(brats_case, output_dir, meta)
@@ -746,6 +760,7 @@ def main():
         args.prompt_mode,
         args.image_size,
         yolo_checkpoint=args.yolo_checkpoint,
+        yolo_predictions=args.yolo_predictions,
         yolo_conf=args.yolo_conf,
         yolo_iou=args.yolo_iou,
         yolo_max_det=args.yolo_max_det,
@@ -807,6 +822,9 @@ def main():
             "use_amp": bool(args.use_amp),
             "cudnn_enabled": bool(torch.backends.cudnn.enabled),
             "yolo_checkpoint": str(Path(args.yolo_checkpoint).resolve()) if args.prompt_mode == "yolo_box" else None,
+            "yolo_predictions": str(Path(args.yolo_predictions).resolve())
+            if args.prompt_mode == "frozen_yolo_box" and args.yolo_predictions
+            else None,
             "yolo_conf": float(args.yolo_conf) if args.prompt_mode == "yolo_box" else None,
             "yolo_iou": float(args.yolo_iou) if args.prompt_mode == "yolo_box" else None,
             "yolo_max_det": int(args.yolo_max_det) if args.prompt_mode == "yolo_box" else None,
@@ -817,8 +835,12 @@ def main():
                 "TC": str(args.prompt_box_strategy_tc or args.prompt_box_strategy),
                 "WT": str(args.prompt_box_strategy_wt or args.prompt_box_strategy),
             } if args.prompt_mode == "yolo_box" else None,
-            "class_prompt_variant": str(args.class_prompt_variant) if args.prompt_mode == "yolo_box" else None,
-            "et_prompt_variant": str(args.et_prompt_variant) if args.prompt_mode == "yolo_box" else None,
+            "class_prompt_variant": str(args.class_prompt_variant)
+            if args.prompt_mode in ("yolo_box", "frozen_yolo_box")
+            else None,
+            "et_prompt_variant": str(args.et_prompt_variant)
+            if args.prompt_mode in ("yolo_box", "frozen_yolo_box")
+            else None,
             "yolo_top2_rules": {
                 "score_ratio": float(args.top2_score_ratio),
                 "area_ratio_min": float(args.top2_area_ratio_min),
